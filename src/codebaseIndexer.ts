@@ -55,6 +55,36 @@ const SUPPORTED_EXTS = new Set([".py", ".ts", ".tsx"]);
 
 // ── Public entry point ────────────────────────────────────────────────────────
 
+/**
+ * Fast, synchronous pre-check — reads only the local cache file and file hashes.
+ * No network calls. Returns true if any file is new/changed or the provider changed.
+ * Use this before showing the indexing UI to avoid unnecessary Jina API calls.
+ */
+export function needsIndexing(wsRoot: string, cfg: WalkthroughConfig): boolean {
+  const provider   = cfg.embeddingProvider ?? "jina";
+  const vectorSize = VECTOR_SIZES[provider] ?? 768;
+  const cache      = loadCache(wsRoot);
+
+  // Provider or vector size changed → full re-index required
+  if (cache.embeddingProvider !== provider || cache.vectorSize !== vectorSize) return true;
+
+  const files = scanFiles(wsRoot);
+
+  // No files at all → nothing to index
+  if (files.length === 0) return false;
+
+  for (const filePath of files) {
+    const relPath = path.relative(wsRoot, filePath).replace(/\\/g, "/");
+    let source: string;
+    try { source = fs.readFileSync(filePath, "utf8"); }
+    catch { return true; }  // can't read → treat as changed
+
+    if (cache.files[relPath]?.hash !== fileHash(source)) return true;
+  }
+
+  return false;  // every file matches the cache — nothing to do
+}
+
 export async function indexWorkspace(
   wsRoot:     string,
   cfg:        WalkthroughConfig,

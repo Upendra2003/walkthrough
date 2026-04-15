@@ -11,7 +11,7 @@ import {
 } from "./config";
 import { OnboardingPanel } from "./onboarding";
 import { setActiveConfig, callLLM } from "./narrate";
-import { indexWorkspace }           from "./codebaseIndexer";
+import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -675,12 +675,21 @@ export function activate(context: vscode.ExtensionContext): void {
     setActiveConfig(sessionConfig);
     log(`[config] Session: ${picked.provider} · ${picked.model}`);
 
-    // ── Cinematic indexing (builds/updates Qdrant vector store) ──────────────
+    // ── Indexing (builds/updates Qdrant vector store) ────────────────────────
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (wsRoot && sessionConfig.embeddingApiKey) {
-      await runIndexingWithUI(wsRoot, sessionConfig);
-    } else if (!sessionConfig.embeddingApiKey) {
+    if (!sessionConfig.embeddingApiKey) {
       log("[index] No embedding key — skipping indexing. Configure it via Walkthrough: Configure.");
+    } else if (wsRoot) {
+      if (needsIndexing(wsRoot, sessionConfig)) {
+        log("[index] New or changed files detected — starting indexing.");
+        await runIndexingWithUI(wsRoot, sessionConfig);
+      } else {
+        log("[index] All files cached and unchanged — skipping indexing.");
+        subtitleProvider?.show("✓  Codebase knowledge is up to date.", true);
+        subtitleProvider?.focus();
+        await delay(1400);
+        subtitleProvider?.hide();
+      }
     }
 
     setRunning(true);
