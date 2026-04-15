@@ -1,4 +1,5 @@
 # Walkthrough
+<img width="2752" height="1097" alt="Intro1" src="https://github.com/user-attachments/assets/d98cfb52-7980-4484-8620-0a0e410315f8" />
 
 > *AI tools generate large codebases fast. But comprehending them? That's still on you.*
 >
