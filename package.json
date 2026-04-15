@@ -1,0 +1,204 @@
+{
+  "name": "walkthrough",
+  "displayName": "Walkthrough",
+  "description": "Parse TypeScript and Python files into semantic blocks and walk through them with highlights",
+  "version": "2.2.2",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "walkthrough.explain",
+        "title": "Walkthrough: Explain File",
+        "icon": {
+          "light": "./assets/play-button.png",
+          "dark":  "./assets/play-button.png"
+        }
+      },
+      {
+        "command": "walkthrough.togglePause",
+        "title": "Walkthrough: Pause / Resume"
+      },
+      {
+        "command": "walkthrough.next",
+        "title": "Walkthrough: Next Block"
+      },
+      {
+        "command": "walkthrough.prev",
+        "title": "Walkthrough: Previous Block"
+      },
+      {
+        "command": "walkthrough.stop",
+        "title": "Walkthrough: Stop"
+      },
+      {
+        "command": "walkthrough.ask",
+        "title": "Walkthrough: Ask Question (Q&A)"
+      },
+      {
+        "command": "walkthrough.deepDive",
+        "title": "Walkthrough: Deep Dive (line-by-line)"
+      },
+      {
+        "command": "walkthrough.skipLine",
+        "title": "Walkthrough: Skip Line / Skip Block"
+      },
+      {
+        "command": "walkthrough.skipFile",
+        "title": "Walkthrough: Skip File (advance to next file)"
+      },
+      {
+        "command": "walkthrough.configure",
+        "title": "Walkthrough: Configure (API keys, provider, model)",
+        "icon": "$(settings-gear)"
+      }
+    ],
+    "views": {
+      "panel": [
+        {
+          "type": "webview",
+          "id": "walkthrough.subtitle",
+          "name": "Walkthrough"
+        }
+      ]
+    },
+    "menus": {
+      "editor/title": [
+        {
+          "command": "walkthrough.explain",
+          "when": "editorLangId == typescript || editorLangId == typescriptreact || editorLangId == python || workspaceFolderCount > 0",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "walkthrough.explain",
+        "key": "ctrl+shift+e",
+        "mac": "cmd+shift+e",
+        "when": "editorLangId == typescript || editorLangId == typescriptreact || editorLangId == python || workspaceFolderCount > 0"
+      },
+      {
+        "command": "walkthrough.togglePause",
+        "key": "space",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.next",
+        "key": "right",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.prev",
+        "key": "left",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.stop",
+        "key": "escape",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.ask",
+        "key": "ctrl+shift+oem_2",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.ask",
+        "key": "q",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.deepDive",
+        "key": "ctrl+shift+i",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.deepDive",
+        "key": "d",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.skipLine",
+        "key": "ctrl+shift+oem_period",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.skipLine",
+        "key": "s",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.skipFile",
+        "key": "ctrl+shift+oem_comma",
+        "when": "walkthrough.running && !inputFocus"
+      },
+      {
+        "command": "walkthrough.skipFile",
+        "key": "f",
+        "when": "walkthrough.running && !inputFocus"
+      }
+    ],
+    "configuration": {
+      "title": "Walkthrough",
+      "properties": {
+        "walkthrough.provider": {
+          "type": "string",
+          "enum": ["groq", "openai", "anthropic", "custom"],
+          "enumDescriptions": [
+            "Groq — free, fast, open-source models (Llama, Qwen, Mixtral)",
+            "OpenAI — GPT-4o, GPT-4o Mini, GPT-4 Turbo",
+            "Anthropic — Claude Opus, Sonnet, Haiku",
+            "Custom — any OpenAI-compatible API endpoint"
+          ],
+          "default": "groq",
+          "description": "LLM provider used for code narration and Q&A."
+        },
+        "walkthrough.model": {
+          "type": "string",
+          "default": "qwen/qwen3-32b",
+          "description": "Model ID. Use the Setup wizard (Walkthrough: Configure) to pick from a list."
+        },
+        "walkthrough.customBaseUrl": {
+          "type": "string",
+          "default": "",
+          "description": "Base URL for a custom OpenAI-compatible provider (e.g. https://your-api.example.com/v1)."
+        },
+        "walkthrough.embeddingProvider": {
+          "type": "string",
+          "enum": ["jina", "openai"],
+          "enumDescriptions": [
+            "Jina AI — jina-embeddings-v2-base-code (768 dims, free tier, code-optimised)",
+            "OpenAI  — text-embedding-3-small (1536 dims, reuses your OpenAI key)"
+          ],
+          "default": "jina",
+          "description": "Embedding provider for codebase indexing and Q&A semantic search."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "groq-sdk": "^0.9.0",
+    "tree-sitter": "^0.21.1",
+    "tree-sitter-python": "^0.21.0",
+    "tree-sitter-typescript": "^0.21.2",
+    "web-tree-sitter": "^0.21.0"
+  }
+}
