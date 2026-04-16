@@ -9,20 +9,20 @@ export interface SessionCallbacks {
   log:          (msg: string) => void;
   setStatus:    (msg: string) => void;
   clearStatus:  () => void;
-  /** Called when pause state toggles — lets the UI flip button icon + graph node badge. */
+  /** Called when pause state toggles — lets the UI flip button icon. */
   setPaused?:   (paused: boolean) => void;
-  /** Render a line of subtitle text.  loading=true → dim/italic style. */
+  /** Render a subtitle line (loading=true → pulsing state, no words). */
   showSubtitle?: (text: string, loading?: boolean) => void;
+  /** Word-by-word subtitle animation — sends full word array + active index. */
+  showSubtitleWords?: (words: string[], activeIndex: number) => void;
   /** Clear the subtitle. */
   hideSubtitle?: () => void;
 }
 
 // ── Subtitle animation constants ──────────────────────────────────────────────
 
-/** Max characters on one subtitle line before rolling to the next. */
-const SUBTITLE_MAX_CHARS = 80;
 /** Milliseconds between each word appearing (~133 wpm, matches Sarvam TTS pace). */
-const SUBTITLE_WORD_MS   = 450;
+const SUBTITLE_WORD_MS = 450;
 
 // ---------------------------------------------------------------------------
 // WalkthroughSession
@@ -51,7 +51,7 @@ export class WalkthroughSession {
   // ── Subtitle animation handle ─────────────────────────────────────────────
   private subtitleStopFn: (() => void) | null = null;
 
-  // ── Decoration types (editor highlights only — subtitle lives in SubtitlePanel) ──
+  // ── Decoration types (editor highlights only — subtitle lives in GraphPanel) ──
   private readonly decorationType:     vscode.TextEditorDecorationType;
   private readonly lineDecorationType: vscode.TextEditorDecorationType;
   private readonly qaDecorationType:   vscode.TextEditorDecorationType;
@@ -60,9 +60,10 @@ export class WalkthroughSession {
   private readonly log:           (msg: string) => void;
   private readonly setStatus:     (msg: string) => void;
   private readonly clearStatus:   () => void;
-  private readonly setPaused?:    (paused: boolean) => void;
-  private readonly showSubtitle?: (text: string, loading?: boolean) => void;
-  private readonly hideSubtitle?: () => void;
+  private readonly setPaused?:          (paused: boolean) => void;
+  private readonly showSubtitle?:       (text: string, loading?: boolean) => void;
+  private readonly showSubtitleWords?:  (words: string[], activeIndex: number) => void;
+  private readonly hideSubtitle?:       () => void;
 
   constructor(
     private readonly editor: vscode.TextEditor,
@@ -70,12 +71,13 @@ export class WalkthroughSession {
     private readonly fileContext: string | null,
     callbacks: SessionCallbacks
   ) {
-    this.log          = callbacks.log;
-    this.setStatus    = callbacks.setStatus;
-    this.clearStatus  = callbacks.clearStatus;
-    this.setPaused    = callbacks.setPaused;
-    this.showSubtitle = callbacks.showSubtitle;
-    this.hideSubtitle = callbacks.hideSubtitle;
+    this.log                 = callbacks.log;
+    this.setStatus           = callbacks.setStatus;
+    this.clearStatus         = callbacks.clearStatus;
+    this.setPaused           = callbacks.setPaused;
+    this.showSubtitle        = callbacks.showSubtitle;
+    this.showSubtitleWords   = callbacks.showSubtitleWords;
+    this.hideSubtitle        = callbacks.hideSubtitle;
 
     this.decorationType = vscode.window.createTextEditorDecorationType({
       backgroundColor: "rgba(255, 220, 0, 0.28)",
@@ -423,7 +425,8 @@ export class WalkthroughSession {
 
   /**
    * Kick off a word-by-word subtitle animation.
-   * Words appear at SUBTITLE_WORD_MS intervals, line-wrapping at SUBTITLE_MAX_CHARS.
+   * Sends the full word array with an advancing activeIndex every SUBTITLE_WORD_MS ms.
+   * The webview renders done / active / pending classes on each span.
    * Stopped automatically when playWithControls exits.
    */
   private startSubtitleAnimation(text: string): void {
@@ -432,21 +435,23 @@ export class WalkthroughSession {
     const words = text.trim().split(/\s+/).filter(Boolean);
     if (words.length === 0) return;
 
-    let stopped  = false;
-    let lineText  = "";
-    let wordIdx   = 0;
+    let stopped     = false;
+    let activeIndex = 0;
 
     const advance = () => {
       if (stopped || this.stopped) return;
-      if (wordIdx >= words.length) return;
 
-      const word      = words[wordIdx++];
-      const candidate = lineText ? `${lineText} ${word}` : word;
+      if (this.showSubtitleWords) {
+        this.showSubtitleWords(words, activeIndex);
+      } else {
+        // Fallback for callers that only wire showSubtitle
+        this.showSubtitle?.(words.slice(0, activeIndex + 1).join(" "));
+      }
 
-      lineText = candidate.length > SUBTITLE_MAX_CHARS ? word : candidate;
-
-      this.showSubtitle?.(lineText);
-      setTimeout(advance, SUBTITLE_WORD_MS);
+      if (activeIndex < words.length - 1) {
+        activeIndex++;
+        setTimeout(advance, SUBTITLE_WORD_MS);
+      }
     };
 
     advance();

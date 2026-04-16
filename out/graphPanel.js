@@ -1,17 +1,28 @@
 "use strict";
 /**
- * GraphPanel — VS Code WebviewPanel that renders the import-graph KG.
+ * GraphPanel — WebviewPanel: import graph (top) + subtitle zone + video controls (bottom).
  *
- * Changes vs. previous version:
- *   - Python official SVG logo replaces the snake emoji.
- *   - setPaused(bool) flips the active node between "reading" and "⏸ paused"
- *     states with a blue tint, so the user knows the session is mid-block.
+ * Layout (flex column, 100vh):
+ *   ▸ #graph-section   — scrollable file tree            (flex: 1)
+ *   ▸ #subtitle-section — capped subtitle zone           (flex-shrink: 0, max-height: 130px)
+ *   ▸ #controls-bar     — video-player control row       (flex-shrink: 0, ~44px)
+ *
+ * Extension → webview messages:
+ *   { type: 'update', tree }
+ *   { type: 'subtitle', words, activeIndex }
+ *   { type: 'subtitle-loading' }
+ *   { type: 'subtitle-hide' }
+ *   { type: 'subtitle-language', code, label }
+ *   { type: 'set-paused', paused }          ← flips ⏸/▶ button icon
+ *
+ * Webview → extension messages:
+ *   { type: 'navigate', file }
+ *   { type: 'control',  action }            ← prev|pause|next|skip|deep-dive|skip-file|ask|stop
+ *   { type: 'toggle-language' }
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GraphPanel = void 0;
 const vscode = require("vscode");
-// Official Python logo SVG (VS Code codicons variant, fill="currentColor").
-// Stored as a TS constant and embedded via JSON.stringify to avoid escaping issues.
 const PYTHON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" ' +
     'xmlns="http://www.w3.org/2000/svg" fill="currentColor">' +
     '<path fill-rule="evenodd" clip-rule="evenodd" d="M12.3753 4.5C13.1843 4.47123 ' +
@@ -49,12 +60,16 @@ const PYTHON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" ' +
 class GraphPanel {
     constructor(context, graph) {
         this.clickCallback = null;
+        this.controlCallback = null;
         this.disposed = false;
         this.panel = vscode.window.createWebviewPanel("walkthroughGraph", "Walkthrough — Codebase Map", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, { enableScripts: true, retainContextWhenHidden: true });
         this.panel.webview.html = buildHtml(graph.root);
         this.panel.webview.onDidReceiveMessage((msg) => {
-            if (msg.type === "navigate" && this.clickCallback) {
+            if (msg.type === "navigate" && msg.file && this.clickCallback) {
                 this.clickCallback(msg.file);
+            }
+            if (msg.type === "control" && msg.action && this.controlCallback) {
+                this.controlCallback(msg.action);
             }
         }, undefined, context.subscriptions);
         this.panel.onDidDispose(() => { this.disposed = true; }, undefined, context.subscriptions);
@@ -64,15 +79,19 @@ class GraphPanel {
             return;
         this.panel.webview.postMessage({ type: "update", tree: serializeNode(root) });
     }
-    /** Toggle the pause indicator on the currently-active node. */
+    /** Send any message to the webview (subtitle, subtitle-loading, etc.). */
+    postMessage(msg) {
+        if (!this.disposed)
+            this.panel.webview.postMessage(msg);
+    }
+    /** Update the pause/play icon on the in-panel control button. */
     setPaused(paused) {
-        if (this.disposed)
-            return;
-        this.panel.webview.postMessage({ type: "pause", paused });
+        if (!this.disposed)
+            this.panel.webview.postMessage({ type: "set-paused", paused });
     }
-    onNodeClick(cb) {
-        this.clickCallback = cb;
-    }
+    onNodeClick(cb) { this.clickCallback = cb; }
+    /** Register a handler for in-panel button presses. */
+    onControl(cb) { this.controlCallback = cb; }
     reveal() {
         if (!this.disposed)
             this.panel.reveal(vscode.ViewColumn.Beside, true);
@@ -84,30 +103,49 @@ class GraphPanel {
 }
 exports.GraphPanel = GraphPanel;
 function serializeNode(n) {
-    return { id: n.id, relativePath: n.relativePath, language: n.language, status: n.status,
-        children: n.children.map(serializeNode) };
+    return {
+        id: n.id, relativePath: n.relativePath, language: n.language, status: n.status,
+        children: n.children.map(serializeNode),
+    };
 }
-// ── HTML ──────────────────────────────────────────────────────────────────────
+// ── HTML ───────────────────────────────────────────────────────────────────────
 function buildHtml(root) {
     const initialJson = JSON.stringify(serializeNode(root)).replace(/</g, "\\u003c");
-    // Embed SVG safely — JSON.stringify handles all escaping
     const pythonSvgJs = JSON.stringify(PYTHON_SVG);
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline';">
+      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline';">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500&display=swap');
+
 * { box-sizing: border-box; margin: 0; padding: 0; }
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+}
 
 body {
   background: var(--vscode-editor-background, #1e1e2e);
   color: var(--vscode-foreground, #cdd6f4);
   font-family: var(--vscode-font-family, 'Segoe UI', monospace);
   font-size: 13px;
-  padding: 16px 12px;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   user-select: none;
+}
+
+/* ════ Graph section ════ */
+#graph-section {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 12px;
+  min-height: 0;
 }
 
 #header {
@@ -126,9 +164,13 @@ body {
   color: var(--vscode-textLink-foreground, #89b4fa);
   flex: 1;
 }
-#stats { font-size: 11px; color: var(--vscode-descriptionForeground, #6c7086); }
+#stats {
+  font-size: 10px;
+  color: var(--vscode-descriptionForeground, #6c7086);
+  font-style: italic;
+  letter-spacing: 0.02em;
+}
 
-/* ── Node rows ── */
 .node-row {
   display: flex;
   align-items: center;
@@ -140,20 +182,22 @@ body {
   border-left: 3px solid transparent;
   transition: background 0.12s;
 }
-.node-row:hover { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); }
+.node-row:hover    { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); }
+.node-row.active   { background: rgba(249,226,175,0.10); border-left-color: #f9e2af; }
+.node-row.completed{ background: rgba(166,227,161,0.07); border-left-color: #a6e3a1; }
+.node-row.skipped  { opacity: 0.45; }
 
-.node-row.active    { background: rgba(249,226,175,0.10); border-left-color: #f9e2af; }
-.node-row.completed { background: rgba(166,227,161,0.07); border-left-color: #a6e3a1; }
-.node-row.skipped   { opacity: 0.45; }
-
-/* Pause state — replaces the yellow active tint with a calm blue */
-.node-row.active.paused {
-  background: rgba(137,180,250,0.10);
-  border-left-color: #89b4fa;
+.chapter-num {
+  font-size: 10px;
+  color: rgba(255,255,255,0.2);
+  font-variant-numeric: tabular-nums;
+  flex-shrink: 0;
+  min-width: 20px;
+  letter-spacing: 0.02em;
 }
-.node-row.active.paused .filename { color: #89b4fa !important; }
+.node-row.active    .chapter-num { color: rgba(249,226,175,0.5); }
+.node-row.completed .chapter-num { color: rgba(166,227,161,0.4); }
 
-/* ── Icon ── */
 .icon {
   width: 18px;
   text-align: center;
@@ -162,14 +206,11 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  /* colour the SVG icon to match the row state */
   color: var(--vscode-descriptionForeground, #6c7086);
 }
 .node-row.active    .icon { color: #f9e2af; }
 .node-row.completed .icon { color: #a6e3a1; }
-.node-row.active.paused .icon { color: #89b4fa; }
 
-/* ── Filename ── */
 .filename {
   flex: 1;
   white-space: nowrap;
@@ -181,7 +222,6 @@ body {
 .node-row.completed .filename { color: #a6e3a1; }
 .node-row.skipped   .filename { text-decoration: line-through; color: #6c7086; }
 
-/* ── Badges ── */
 .badge {
   font-size: 10px;
   padding: 1px 7px;
@@ -192,7 +232,6 @@ body {
 .badge-active    { background: rgba(249,226,175,0.18); color: #f9e2af; }
 .badge-completed { background: rgba(166,227,161,0.18); color: #a6e3a1; }
 .badge-skipped   { background: rgba(108,112,134,0.18); color: #9399b2; }
-.badge-paused    { background: rgba(137,180,250,0.18); color: #89b4fa; }
 
 .children {
   margin-left: 28px;
@@ -212,34 +251,227 @@ body {
 }
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-.dot-active    { background: #f9e2af; }
-.dot-completed { background: #a6e3a1; }
-.dot-skipped   { background: #6c7086; }
-.dot-pending   { background: #45475a; }
-.dot-paused    { background: #89b4fa; }
+.dot-active  { background: #f9e2af; }
+.dot-done    { background: #a6e3a1; }
+.dot-skipped { background: #6c7086; }
+.dot-pending { background: #45475a; }
+
+/* ════ Subtitle section ════ */
+#subtitle-section {
+  flex-shrink: 0;
+  /* cap height so overflow NEVER pushes outside the panel */
+  max-height: 130px;
+  overflow: hidden;
+  border-top: 0.5px solid rgba(255,255,255,0.08);
+  background: linear-gradient(to bottom, transparent, rgba(0,0,0,0.82));
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 20px 10px;
+  transition: opacity 0.3s ease;
+}
+#subtitle-section.hidden {
+  opacity: 0;
+  pointer-events: none;
+  max-height: 0;
+  padding: 0;
+  border-top-width: 0;
+}
+
+#lang-tag {
+  position: absolute;
+  top: 6px;
+  right: 10px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.28);
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 3px;
+  border: 1px solid rgba(255,255,255,0.10);
+  transition: color 0.15s, border-color 0.15s;
+  user-select: none;
+}
+#lang-tag:hover { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.25); }
+
+#subtitle-inner {
+  width: 100%;
+  text-align: center;
+  overflow: hidden;
+}
+
+#subtitle-words {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 15px;
+  line-height: 1.5;
+  color: white;
+  word-break: break-word;
+  overflow-wrap: break-word;
+  /* clamp to 3 visible lines before container caps the rest */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+#subtitle-words.devanagari { font-family: 'Noto Sans Devanagari', 'Segoe UI', sans-serif; }
+#subtitle-words.tamil      { font-family: 'Noto Sans Tamil',       'Segoe UI', sans-serif; }
+
+.word { display: inline; transition: opacity 0.12s ease; }
+.word.done    { opacity: 0.38; color: white; }
+.word.active  { opacity: 1.0;  color: white; filter: brightness(1.18); }
+.word.pending { opacity: 0.18; color: white; }
+
+#subtitle-loading-msg {
+  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-size: 12px;
+  color: rgba(255,255,255,0.28);
+  font-style: italic;
+  display: none;
+}
+@keyframes subtitlePulse {
+  0%, 100% { opacity: 0.15; }
+  50%       { opacity: 0.5;  }
+}
+#subtitle-loading-msg.pulsing {
+  display: block;
+  animation: subtitlePulse 1.6s ease infinite;
+}
+
+/* ════ Video-player controls bar ════ */
+#controls-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  padding: 6px 12px 8px;
+  gap: 8px;
+  background: rgba(0,0,0,0.55);
+  border-top: 0.5px solid rgba(255,255,255,0.07);
+}
+
+/* Primary playback group: ⏮ ⏸ ⏭ */
+.ctrl-primary {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.ctrl-btn {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.6);
+  font-size: 17px;
+  cursor: pointer;
+  padding: 4px 7px;
+  border-radius: 5px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: color 0.12s, background 0.12s;
+}
+.ctrl-btn:hover { color: white; background: rgba(255,255,255,0.1); }
+
+#btn-pause {
+  font-size: 20px;
+  padding: 4px 10px;
+  color: rgba(255,255,255,0.85);
+}
+#btn-pause:hover { color: white; background: rgba(255,255,255,0.12); }
+
+/* Thin separator */
+.ctrl-divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(255,255,255,0.1);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+/* Secondary utility buttons */
+.ctrl-secondary {
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  flex: 1;
+}
+
+.ctrl-sm {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.35);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 3px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+  line-height: 1.2;
+  transition: color 0.12s, background 0.12s;
+}
+.ctrl-sm:hover { color: rgba(255,255,255,0.82); background: rgba(255,255,255,0.08); }
+
+.ctrl-stop-btn {
+  margin-left: auto;
+  color: rgba(220,70,70,0.45);
+  font-size: 14px;
+  padding: 3px 6px;
+}
+.ctrl-stop-btn:hover { color: rgba(220,70,70,0.9); background: rgba(220,70,70,0.12); }
 </style>
 </head>
 <body>
 
-<div id="header">
-  <h2>&#x2B21; Codebase Map</h2>
-  <span id="stats"></span>
+<!-- ── Scrollable graph section ── -->
+<div id="graph-section">
+  <div id="header">
+    <h2>&#x2B21; Codebase Map</h2>
+    <span id="stats"></span>
+  </div>
+  <div id="tree"></div>
+  <div id="legend">
+    <span class="legend-item"><span class="dot dot-active"></span>active</span>
+    <span class="legend-item"><span class="dot dot-done"></span>done</span>
+    <span class="legend-item"><span class="dot dot-skipped"></span>skipped</span>
+    <span class="legend-item"><span class="dot dot-pending"></span>pending</span>
+  </div>
 </div>
 
-<div id="tree"></div>
+<!-- ── Subtitle zone (capped, never overflows) ── -->
+<div id="subtitle-section" class="hidden">
+  <span id="lang-tag">EN</span>
+  <div id="subtitle-inner">
+    <div id="subtitle-words"></div>
+    <div id="subtitle-loading-msg"></div>
+  </div>
+</div>
 
-<div id="legend">
-  <span class="legend-item"><span class="dot dot-active"></span>reading</span>
-  <span class="legend-item"><span class="dot dot-paused"></span>paused</span>
-  <span class="legend-item"><span class="dot dot-completed"></span>done</span>
-  <span class="legend-item"><span class="dot dot-skipped"></span>skipped</span>
-  <span class="legend-item"><span class="dot dot-pending"></span>pending</span>
+<!-- ── Video-player controls ── -->
+<div id="controls-bar">
+  <div class="ctrl-primary">
+    <button class="ctrl-btn" data-action="prev"  title="Previous block  \u2190">&#x23EE;</button>
+    <button class="ctrl-btn" id="btn-pause" data-action="pause" title="Pause  Space">&#x23F8;</button>
+    <button class="ctrl-btn" data-action="next"  title="Next block  \u2192">&#x23ED;</button>
+  </div>
+  <div class="ctrl-divider"></div>
+  <div class="ctrl-secondary">
+    <button class="ctrl-sm" data-action="skip"      title="Skip block  S">&#x23E9; Skip</button>
+    <button class="ctrl-sm" data-action="deep-dive" title="Deep Dive  D">&#x25A6; Dive</button>
+    <button class="ctrl-sm" data-action="skip-file" title="Skip File  F">&#x23ED; File</button>
+    <button class="ctrl-sm" data-action="ask"       title="Ask (Q&amp;A)  Q">&#x3F; Ask</button>
+    <button class="ctrl-sm ctrl-stop-btn" data-action="stop" title="Stop  Esc">&#x23F9;</button>
+  </div>
 </div>
 
 <script>
-var vscode      = acquireVsCodeApi();
+var vscode       = acquireVsCodeApi();
 var INITIAL_TREE = ${initialJson};
-var PYTHON_SVG  = ${pythonSvgJs};
+var PYTHON_SVG   = ${pythonSvgJs};
+
+// ── Render state ─────────────────────────────────────────────────────────────
+var chapterCounter   = 0;
+var seenIds          = new Set();
+var activeChapterNum = 0;
 
 function getIcon(lang, status) {
   if (status === 'completed') return '&#x2713;';
@@ -250,22 +482,34 @@ function getIcon(lang, status) {
   return '&#x25A1;';
 }
 
-function getBadgeLabel(status) {
-  if (status === 'active')    return 'reading';
-  if (status === 'completed') return 'done';
-  if (status === 'skipped')   return 'skipped';
-  return '';
+function getBadge(status) {
+  if (status === 'active')    return { cls: 'badge-active',    label: 'active'  };
+  if (status === 'completed') return { cls: 'badge-completed', label: 'done'    };
+  if (status === 'skipped')   return { cls: 'badge-skipped',   label: 'skipped' };
+  return null;
 }
 
 function renderNode(node, container) {
+  chapterCounter++;
+  var myChapter   = chapterCounter;
+  var isDuplicate = seenIds.has(node.id);
+  if (!isDuplicate) seenIds.add(node.id);
+  if (node.status === 'active') activeChapterNum = myChapter;
+
   var wrapper = document.createElement('div');
 
   var row = document.createElement('div');
   row.className = 'node-row ' + node.status;
   row.setAttribute('data-file', node.id);
+  if (isDuplicate) row.style.opacity = '0.45';
   row.addEventListener('click', function() {
     vscode.postMessage({ type: 'navigate', file: node.id });
   });
+
+  var chapEl = document.createElement('span');
+  chapEl.className = 'chapter-num';
+  chapEl.textContent = isDuplicate ? '\u21A9' : String(myChapter).padStart(2, '0');
+  row.appendChild(chapEl);
 
   var iconEl = document.createElement('span');
   iconEl.className = 'icon';
@@ -278,11 +522,11 @@ function renderNode(node, container) {
   nameEl.textContent = node.relativePath;
   row.appendChild(nameEl);
 
-  var label = getBadgeLabel(node.status);
-  if (label) {
+  var b = getBadge(node.status);
+  if (b) {
     var badge = document.createElement('span');
-    badge.className = 'badge badge-' + node.status;
-    badge.textContent = label;
+    badge.className = 'badge ' + b.cls;
+    badge.textContent = b.label;
     row.appendChild(badge);
   }
 
@@ -300,46 +544,89 @@ function renderNode(node, container) {
   container.appendChild(wrapper);
 }
 
-function countByStatus(node, counts) {
-  counts[node.status] = (counts[node.status] || 0) + 1;
-  for (var i = 0; i < node.children.length; i++) {
-    countByStatus(node.children[i], counts);
-  }
-}
-
 function render(tree) {
+  chapterCounter   = 0;
+  seenIds          = new Set();
+  activeChapterNum = 0;
+
   var container = document.getElementById('tree');
   container.innerHTML = '';
   renderNode(tree, container);
 
-  var counts = {};
-  countByStatus(tree, counts);
-  var total = Object.values(counts).reduce(function(a, b) { return a + b; }, 0);
-  var done  = (counts['completed'] || 0) + (counts['skipped'] || 0);
-  document.getElementById('stats').textContent = done + ' / ' + total + ' files';
+  var total   = chapterCounter;
+  var statsEl = document.getElementById('stats');
+  statsEl.textContent = activeChapterNum > 0
+    ? 'Chapter ' + activeChapterNum + ' of ' + total
+    : total + (total === 1 ? ' file' : ' files');
 }
 
-/** Toggle pause state on the currently active node mid-block. */
-function applyPause(isPaused) {
-  var rows = document.querySelectorAll('.node-row.active');
-  for (var i = 0; i < rows.length; i++) {
-    var row = rows[i];
-    if (isPaused) {
-      row.classList.add('paused');
-      var b = row.querySelector('.badge-active');
-      if (b) { b.className = 'badge badge-paused'; b.textContent = '⏸  paused'; }
-    } else {
-      row.classList.remove('paused');
-      var b2 = row.querySelector('.badge-paused');
-      if (b2) { b2.className = 'badge badge-active'; b2.textContent = 'reading'; }
-    }
+// ── Subtitle ─────────────────────────────────────────────────────────────────
+
+function $sub()     { return document.getElementById('subtitle-section'); }
+function $words()   { return document.getElementById('subtitle-words');   }
+function $loading() { return document.getElementById('subtitle-loading-msg'); }
+
+function updateSubtitle(words, activeIndex) {
+  $sub().classList.remove('hidden');
+  $loading().className = '';
+  var el = $words();
+  el.style.display = '';
+  el.innerHTML = '';
+  for (var i = 0; i < words.length; i++) {
+    if (i > 0) el.appendChild(document.createTextNode('\u00A0'));
+    var span = document.createElement('span');
+    span.className = 'word ' + (i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending');
+    span.textContent = words[i];
+    el.appendChild(span);
   }
 }
 
+function showSubtitleLoading() {
+  $sub().classList.remove('hidden');
+  $words().style.display = 'none';
+  var el = $loading();
+  el.textContent = 'preparing\u2026';
+  el.className = 'pulsing';
+}
+
+function hideSubtitle() {
+  $sub().classList.add('hidden');
+}
+
+function updateLangTag(code, label) {
+  document.getElementById('lang-tag').textContent = label || code || 'EN';
+}
+
+document.getElementById('lang-tag').addEventListener('click', function() {
+  vscode.postMessage({ type: 'toggle-language' });
+});
+
+// ── Pause button state ───────────────────────────────────────────────────────
+
+function applyPausedState(paused) {
+  var btn = document.getElementById('btn-pause');
+  btn.innerHTML  = paused ? '&#x25B6;' : '&#x23F8;';
+  btn.title      = paused ? 'Resume  Space' : 'Pause  Space';
+}
+
+// ── Controls — event delegation ──────────────────────────────────────────────
+
+document.getElementById('controls-bar').addEventListener('click', function(e) {
+  var btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  vscode.postMessage({ type: 'control', action: btn.getAttribute('data-action') });
+});
+
+// ── Message handler ──────────────────────────────────────────────────────────
+
 window.addEventListener('message', function(event) {
   var msg = event.data;
-  if (msg.type === 'update') render(msg.tree);
-  if (msg.type === 'pause')  applyPause(msg.paused);
+  if      (msg.type === 'update')            render(msg.tree);
+  else if (msg.type === 'subtitle')          updateSubtitle(msg.words, msg.activeIndex);
+  else if (msg.type === 'subtitle-loading')  showSubtitleLoading();
+  else if (msg.type === 'subtitle-hide')     hideSubtitle();
+  else if (msg.type === 'subtitle-language') updateLangTag(msg.code, msg.label);
+  else if (msg.type === 'set-paused')        applyPausedState(msg.paused);
 });
 
 render(INITIAL_TREE);

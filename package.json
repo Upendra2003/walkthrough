@@ -59,15 +59,6 @@
         "icon": "$(settings-gear)"
       }
     ],
-    "views": {
-      "panel": [
-        {
-          "type": "webview",
-          "id": "walkthrough.subtitle",
-          "name": "Walkthrough"
-        }
-      ]
-    },
     "menus": {
       "editor/title": [
         {

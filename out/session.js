@@ -5,8 +5,6 @@ const vscode = require("vscode");
 const narrate_1 = require("./narrate");
 const audioPlayer_1 = require("./audioPlayer");
 // ── Subtitle animation constants ──────────────────────────────────────────────
-/** Max characters on one subtitle line before rolling to the next. */
-const SUBTITLE_MAX_CHARS = 80;
 /** Milliseconds between each word appearing (~133 wpm, matches Sarvam TTS pace). */
 const SUBTITLE_WORD_MS = 450;
 // ---------------------------------------------------------------------------
@@ -39,6 +37,7 @@ class WalkthroughSession {
         this.clearStatus = callbacks.clearStatus;
         this.setPaused = callbacks.setPaused;
         this.showSubtitle = callbacks.showSubtitle;
+        this.showSubtitleWords = callbacks.showSubtitleWords;
         this.hideSubtitle = callbacks.hideSubtitle;
         this.decorationType = vscode.window.createTextEditorDecorationType({
             backgroundColor: "rgba(255, 220, 0, 0.28)",
@@ -345,7 +344,8 @@ class WalkthroughSession {
     // ── Subtitle animation ────────────────────────────────────────────────────
     /**
      * Kick off a word-by-word subtitle animation.
-     * Words appear at SUBTITLE_WORD_MS intervals, line-wrapping at SUBTITLE_MAX_CHARS.
+     * Sends the full word array with an advancing activeIndex every SUBTITLE_WORD_MS ms.
+     * The webview renders done / active / pending classes on each span.
      * Stopped automatically when playWithControls exits.
      */
     startSubtitleAnimation(text) {
@@ -354,18 +354,21 @@ class WalkthroughSession {
         if (words.length === 0)
             return;
         let stopped = false;
-        let lineText = "";
-        let wordIdx = 0;
+        let activeIndex = 0;
         const advance = () => {
             if (stopped || this.stopped)
                 return;
-            if (wordIdx >= words.length)
-                return;
-            const word = words[wordIdx++];
-            const candidate = lineText ? `${lineText} ${word}` : word;
-            lineText = candidate.length > SUBTITLE_MAX_CHARS ? word : candidate;
-            this.showSubtitle?.(lineText);
-            setTimeout(advance, SUBTITLE_WORD_MS);
+            if (this.showSubtitleWords) {
+                this.showSubtitleWords(words, activeIndex);
+            }
+            else {
+                // Fallback for callers that only wire showSubtitle
+                this.showSubtitle?.(words.slice(0, activeIndex + 1).join(" "));
+            }
+            if (activeIndex < words.length - 1) {
+                activeIndex++;
+                setTimeout(advance, SUBTITLE_WORD_MS);
+            }
         };
         advance();
         this.subtitleStopFn = () => { stopped = true; };

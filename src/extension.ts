@@ -3,7 +3,6 @@ import * as path from "path";
 import { parseBlocks } from "./parser";
 import { buildImportGraph, flattenDFS, ImportGraph } from "./graph";
 import { GraphPanel } from "./graphPanel";
-import { SubtitleViewProvider } from "./subtitlePanel";
 import { WalkthroughSession, SessionCallbacks } from "./session";
 import {
   ConfigManager, WalkthroughConfig, LLMProvider,
@@ -20,22 +19,13 @@ import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
 let outputChannel: vscode.OutputChannel;
 let activeSession: WalkthroughSession | null = null;
 let activeGraphPanel: GraphPanel | null = null;
-let subtitleProvider: SubtitleViewProvider | null = null;
 let configManager: ConfigManager;
 let multiFileStop = false;
 
 // ── Status bar items ──────────────────────────────────────────────────────────
-// All shown when walkthrough is running, hidden otherwise.
+// Only the info item remains — controls have moved into the GraphPanel.
 
-let sbInfo:     vscode.StatusBarItem;   // language · filename · block progress
-let sbPrev:     vscode.StatusBarItem;   // ⏮ Previous block
-let sbPause:    vscode.StatusBarItem;   // ⏸/▶ Pause · Resume
-let sbNext:     vscode.StatusBarItem;   // ⏭ Next block
-let sbSkip:     vscode.StatusBarItem;   // Skip block (S)
-let sbDeepDive: vscode.StatusBarItem;   // Deep Dive (D)
-let sbSkipFile: vscode.StatusBarItem;   // Skip File (F)
-let sbAsk:      vscode.StatusBarItem;   // Ask (Q)
-let sbStop:     vscode.StatusBarItem;   // Stop (Esc)
+let sbInfo: vscode.StatusBarItem;  // language · filename · block progress
 
 let controlItems: vscode.StatusBarItem[] = [];
 
@@ -60,34 +50,13 @@ function makeSBItem(
 }
 
 function initControlBar(): void {
-  // Priority decreases left-to-right so items render in the correct order.
-  sbInfo     = makeSBItem(120, "",                                     undefined,                   "Walkthrough — current block");
-  sbPrev     = makeSBItem(119, "$(chevron-left)",                      "walkthrough.prev",          "⏮  Previous block  (←)");
-  sbPause    = makeSBItem(118, "$(debug-pause)  Pause",                "walkthrough.togglePause",   "⏸  Pause / Resume  (Space)");
-  sbNext     = makeSBItem(117, "$(chevron-right)",                     "walkthrough.next",          "⏭  Next block  (→)");
-  sbSkip     = makeSBItem(116, "$(debug-step-over)  Skip",             "walkthrough.skipLine",      "⏩  Skip block or line  (S · Ctrl+Shift+.)");
-  sbDeepDive = makeSBItem(115, "$(eye)  Deep Dive",                    "walkthrough.deepDive",      "🔍  Deep Dive line by line  (D · Ctrl+Shift+I)");
-  sbSkipFile = makeSBItem(114, "$(go-to-file)  Skip File",             "walkthrough.skipFile",      "⏭  Skip to next file  (F · Ctrl+Shift+,)");
-  sbAsk      = makeSBItem(113, "$(comment-discussion)  Ask",           "walkthrough.ask",           "💬  Ask a question  (Q · Ctrl+Shift+/)");
-  sbStop     = makeSBItem(112, "$(close)  Stop",                       "walkthrough.stop",          "⏹  Stop all  (Esc)");
-
-  controlItems = [sbInfo, sbPrev, sbPause, sbNext, sbSkip, sbDeepDive, sbSkipFile, sbAsk, sbStop];
+  sbInfo = makeSBItem(120, "", undefined, "Walkthrough — current block");
+  controlItems = [sbInfo];
 }
 
-/** Show or hide the entire control row. */
+/** Show or hide the status info item. */
 function showControls(visible: boolean): void {
   controlItems.forEach(item => visible ? item.show() : item.hide());
-}
-
-/** Toggle the pause button icon between ⏸ and ▶. */
-function updatePauseBtn(paused: boolean): void {
-  if (paused) {
-    sbPause.text    = "$(debug-start)  Resume";
-    sbPause.tooltip = "▶  Resume  (Space)";
-  } else {
-    sbPause.text    = "$(debug-pause)  Pause";
-    sbPause.tooltip = "⏸  Pause  (Space)";
-  }
 }
 
 /**
@@ -108,7 +77,7 @@ function langLabel(languageId: string): string {
   return `$(file-code)  ${names[languageId] ?? languageId}`;
 }
 
-/** Build session callbacks that wire into the control bar, graph panel, and subtitle. */
+/** Build session callbacks that wire into the control bar and graph panel. */
 function makeCallbacks(): SessionCallbacks {
   return {
     log,
@@ -119,11 +88,20 @@ function makeCallbacks(): SessionCallbacks {
       sbInfo.text = "";
     },
     setPaused: (paused) => {
-      updatePauseBtn(paused);
       activeGraphPanel?.setPaused(paused);
     },
-    showSubtitle: (text, loading) => subtitleProvider?.show(text, loading),
-    hideSubtitle: ()              => subtitleProvider?.hide(),
+    showSubtitle: (_text, loading) => {
+      if (loading) {
+        activeGraphPanel?.postMessage({ type: "subtitle-loading" });
+      }
+      // Non-loading plain text falls through to showSubtitleWords for word animation
+    },
+    showSubtitleWords: (words, activeIndex) => {
+      activeGraphPanel?.postMessage({ type: "subtitle", words, activeIndex });
+    },
+    hideSubtitle: () => {
+      activeGraphPanel?.postMessage({ type: "subtitle-hide" });
+    },
   };
 }
 
@@ -158,7 +136,6 @@ function log(msg: string): void { outputChannel.appendLine(msg); }
 function setRunning(value: boolean): void {
   vscode.commands.executeCommand("setContext", "walkthrough.running", value);
   showControls(value);
-  if (!value) updatePauseBtn(false);  // reset pause icon when session ends
 }
 
 async function findRootFile(): Promise<{ uri: vscode.Uri; label: string } | undefined> {
@@ -222,11 +199,30 @@ async function runMultiFileWalkthrough(
   // ── Open / update KG panel ────────────────────────────────────────────────
   activeGraphPanel?.dispose();
   activeGraphPanel = new GraphPanel(extensionContext, graph);
+
   activeGraphPanel.onNodeClick(async (filePath) => {
     try {
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
       await vscode.window.showTextDocument(doc, { preserveFocus: false });
     } catch (e) { log(`[graph] Cannot open ${filePath}: ${e}`); }
+  });
+
+  activeGraphPanel.onControl((action) => {
+    switch (action) {
+      case "prev":      activeSession?.prev();         break;
+      case "pause":     activeSession?.togglePause();  break;
+      case "next":      activeSession?.next();         break;
+      case "skip":      activeSession?.skipLine();     break;
+      case "deep-dive": activeSession?.deepDive();     break;
+      case "skip-file": activeSession?.skipFile();     break;
+      case "ask":       activeSession?.askQuestion();  break;
+      case "stop":
+        multiFileStop = true;
+        activeSession?.stop();
+        activeSession = null;
+        setRunning(false);
+        break;
+    }
   });
 
   // ── DFS traversal ────────────────────────────────────────────────────────
@@ -517,13 +513,19 @@ async function runIndexingWithUI(
 
   const vibeTimer = setInterval(() => {
     if (!inFilePhase) {
-      subtitleProvider?.show(INDEXING_VIBES[vibeIdx % INDEXING_VIBES.length], true);
+      activeGraphPanel?.postMessage({ type: "subtitle-loading" });
+      // Update the loading text by cycling vibes via a plain subtitle message
+      const vibe = INDEXING_VIBES[vibeIdx % INDEXING_VIBES.length];
+      activeGraphPanel?.postMessage({
+        type: "subtitle",
+        words: vibe.split(/\s+/).filter(Boolean),
+        activeIndex: -1,
+      });
       vibeIdx++;
     }
   }, 1800);
 
-  subtitleProvider?.show(INDEXING_VIBES[0], true);
-  subtitleProvider?.focus();
+  activeGraphPanel?.postMessage({ type: "subtitle-loading" });
 
   try {
     let result = { indexed: 0, skipped: 0, files: 0 };
@@ -548,12 +550,14 @@ async function runIndexingWithUI(
               // Once we hit actual file processing, switch subtitle to live progress.
               if (p.total > 0) {
                 inFilePhase = true;
-                const pct = Math.round((p.current / p.total) * 100);
+                const pct  = Math.round((p.current / p.total) * 100);
                 const icon = p.message.startsWith("✓") ? "✓" : "⚡";
-                subtitleProvider?.show(
-                  `${icon}  ${p.message}  —  ${pct}% (${p.current} / ${p.total} files)`,
-                  true
-                );
+                const text = `${icon}  ${p.message}  —  ${pct}% (${p.current} / ${p.total} files)`;
+                activeGraphPanel?.postMessage({
+                  type: "subtitle",
+                  words: text.split(/\s+/).filter(Boolean),
+                  activeIndex: -1,
+                });
               }
             },
             log
@@ -582,15 +586,23 @@ async function runIndexingWithUI(
     const total = result.indexed + result.skipped;
     if (total > 0) {
       const newLabel = result.indexed > 0 ? `${result.indexed} new` : "all";
-      subtitleProvider?.show(
-        `🎯  ${total} code blocks in Qdrant — ${newLabel} indexed, AI knows your codebase.`
-      );
+      const line1 = `🎯  ${total} code blocks in Qdrant — ${newLabel} indexed, AI knows your codebase.`;
+      activeGraphPanel?.postMessage({
+        type: "subtitle",
+        words: line1.split(/\s+/).filter(Boolean),
+        activeIndex: -1,
+      });
       await delay(2200);
-      subtitleProvider?.show("🎬  The stage is set.  Lights, camera...  action!");
+      const line2 = "🎬  The stage is set.  Lights, camera...  action!";
+      activeGraphPanel?.postMessage({
+        type: "subtitle",
+        words: line2.split(/\s+/).filter(Boolean),
+        activeIndex: -1,
+      });
       await delay(2000);
     }
 
-    subtitleProvider?.hide();
+    activeGraphPanel?.postMessage({ type: "subtitle-hide" });
 
   } finally {
     clearInterval(vibeTimer);
@@ -615,16 +627,6 @@ export function activate(context: vscode.ExtensionContext): void {
   // Build the control bar (hidden until a session starts)
   initControlBar();
   controlItems.forEach(item => context.subscriptions.push(item));
-
-  // Register the subtitle WebviewView (panel area at the bottom)
-  subtitleProvider = new SubtitleViewProvider(context);
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      "walkthrough.subtitle",
-      subtitleProvider,
-      { webviewOptions: { retainContextWhenHidden: true } }
-    )
-  );
 
   setRunning(false);
 
@@ -685,18 +687,18 @@ export function activate(context: vscode.ExtensionContext): void {
         await runIndexingWithUI(wsRoot, sessionConfig);
       } else {
         log("[index] All files cached and unchanged — skipping indexing.");
-        subtitleProvider?.show("✓  Codebase knowledge is up to date.", true);
-        subtitleProvider?.focus();
+        activeGraphPanel?.postMessage({
+          type: "subtitle",
+          words: ["✓", "Codebase", "knowledge", "is", "up", "to", "date."],
+          activeIndex: -1,
+        });
         await delay(1400);
-        subtitleProvider?.hide();
+        activeGraphPanel?.postMessage({ type: "subtitle-hide" });
       }
     }
 
     setRunning(true);
     multiFileStop = false;
-
-    // Open the subtitle panel in the bottom area (non-blocking)
-    subtitleProvider?.focus();
 
     try {
       const editor = vscode.window.activeTextEditor;
