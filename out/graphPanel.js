@@ -222,17 +222,6 @@ body {
 .node-row.completed .filename { color: #a6e3a1; }
 .node-row.skipped   .filename { text-decoration: line-through; color: #6c7086; }
 
-.badge {
-  font-size: 10px;
-  padding: 1px 7px;
-  border-radius: 10px;
-  flex-shrink: 0;
-  white-space: nowrap;
-}
-.badge-active    { background: rgba(249,226,175,0.18); color: #f9e2af; }
-.badge-completed { background: rgba(166,227,161,0.18); color: #a6e3a1; }
-.badge-skipped   { background: rgba(108,112,134,0.18); color: #9399b2; }
-
 .children {
   margin-left: 28px;
   border-left: 1px solid rgba(255,255,255,0.06);
@@ -259,22 +248,22 @@ body {
 /* ════ Subtitle section ════ */
 #subtitle-section {
   flex-shrink: 0;
-  /* cap height so overflow NEVER pushes outside the panel */
-  max-height: 130px;
-  overflow: hidden;
   border-top: 0.5px solid rgba(255,255,255,0.08);
   background: linear-gradient(to bottom, transparent, rgba(0,0,0,0.82));
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px 20px 10px;
-  transition: opacity 0.3s ease;
+  padding: 16px 20px 12px;
+  transition: opacity 0.25s ease;
+  /* Fixed height: always exactly one "chunk" tall — no overflow, no clamp */
+  height: 88px;
+  overflow: hidden;
 }
 #subtitle-section.hidden {
   opacity: 0;
   pointer-events: none;
-  max-height: 0;
+  height: 0;
   padding: 0;
   border-top-width: 0;
 }
@@ -305,15 +294,11 @@ body {
 #subtitle-words {
   font-family: 'Segoe UI', system-ui, sans-serif;
   font-size: 15px;
-  line-height: 1.5;
+  line-height: 1.55;
   color: white;
+  /* words wrap naturally; the parent's fixed height clips excess */
   word-break: break-word;
   overflow-wrap: break-word;
-  /* clamp to 3 visible lines before container caps the rest */
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
 }
 #subtitle-words.devanagari { font-family: 'Noto Sans Devanagari', 'Segoe UI', sans-serif; }
 #subtitle-words.tamil      { font-family: 'Noto Sans Tamil',       'Segoe UI', sans-serif; }
@@ -482,13 +467,6 @@ function getIcon(lang, status) {
   return '&#x25A1;';
 }
 
-function getBadge(status) {
-  if (status === 'active')    return { cls: 'badge-active',    label: 'active'  };
-  if (status === 'completed') return { cls: 'badge-completed', label: 'done'    };
-  if (status === 'skipped')   return { cls: 'badge-skipped',   label: 'skipped' };
-  return null;
-}
-
 function renderNode(node, container) {
   chapterCounter++;
   var myChapter   = chapterCounter;
@@ -521,14 +499,6 @@ function renderNode(node, container) {
   nameEl.title = node.id;
   nameEl.textContent = node.relativePath;
   row.appendChild(nameEl);
-
-  var b = getBadge(node.status);
-  if (b) {
-    var badge = document.createElement('span');
-    badge.className = 'badge ' + b.cls;
-    badge.textContent = b.label;
-    row.appendChild(badge);
-  }
 
   wrapper.appendChild(row);
 
@@ -566,16 +536,35 @@ function $sub()     { return document.getElementById('subtitle-section'); }
 function $words()   { return document.getElementById('subtitle-words');   }
 function $loading() { return document.getElementById('subtitle-loading-msg'); }
 
+// Number of words shown at once — enough to fill ~2 lines in the panel.
+var CHUNK = 10;
+
 function updateSubtitle(words, activeIndex) {
   $sub().classList.remove('hidden');
   $loading().className = '';
   var el = $words();
   el.style.display = '';
   el.innerHTML = '';
-  for (var i = 0; i < words.length; i++) {
-    if (i > 0) el.appendChild(document.createTextNode('\u00A0'));
+
+  // activeIndex < 0 means "show all as plain caption" (indexing vibes, etc.)
+  if (activeIndex < 0) {
+    el.textContent = words.join(' ');
+    el.style.opacity = '0.75';
+    return;
+  }
+  el.style.opacity = '1';
+
+  // Slide the window: always show the CHUNK words whose window contains activeIndex.
+  // The window snaps forward only when activeIndex leaves the current chunk.
+  var chunkStart = Math.floor(activeIndex / CHUNK) * CHUNK;
+  var chunkEnd   = Math.min(chunkStart + CHUNK, words.length);
+  var localIdx   = activeIndex - chunkStart;
+
+  for (var i = chunkStart; i < chunkEnd; i++) {
+    if (i > chunkStart) el.appendChild(document.createTextNode('\u00A0'));
     var span = document.createElement('span');
-    span.className = 'word ' + (i < activeIndex ? 'done' : i === activeIndex ? 'active' : 'pending');
+    var local = i - chunkStart;
+    span.className = 'word ' + (local < localIdx ? 'done' : local === localIdx ? 'active' : 'pending');
     span.textContent = words[i];
     el.appendChild(span);
   }

@@ -191,7 +191,7 @@ async function runMultiFileWalkthrough(
     log(`[graph] ERROR building graph: ${msg}`);
     sbInfo.backgroundColor = undefined;
     const doc    = await vscode.workspace.openTextDocument(rootUri);
-    const editor = await vscode.window.showTextDocument(doc);
+    const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
     await runSingleFile(editor, rootFileContext);
     return;
   }
@@ -203,7 +203,7 @@ async function runMultiFileWalkthrough(
   activeGraphPanel.onNodeClick(async (filePath) => {
     try {
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
-      await vscode.window.showTextDocument(doc, { preserveFocus: false });
+      await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: false });
     } catch (e) { log(`[graph] Cannot open ${filePath}: ${e}`); }
   });
 
@@ -220,6 +220,8 @@ async function runMultiFileWalkthrough(
         multiFileStop = true;
         activeSession?.stop();
         activeSession = null;
+        activeGraphPanel?.dispose();
+        activeGraphPanel = null;
         setRunning(false);
         break;
     }
@@ -240,11 +242,11 @@ async function runMultiFileWalkthrough(
     }
     seen.add(node.id);
 
-    // Open file
+    // Open file — always in column One so the graph panel never gets pushed aside
     let editor: vscode.TextEditor;
     try {
       const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(node.file));
-      editor    = await vscode.window.showTextDocument(doc);
+      editor    = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
     } catch (e) {
       log(`[graph] Cannot open ${node.relativePath}: ${e}`);
       node.status = "skipped";
@@ -757,6 +759,8 @@ export function activate(context: vscode.ExtensionContext): void {
       activeSession.stop();
       activeSession = null;
     }
+    activeGraphPanel?.dispose();
+    activeGraphPanel = null;
     setRunning(false);
     log("[session] Stopped by user");
   });

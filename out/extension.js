@@ -158,7 +158,7 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
         log(`[graph] ERROR building graph: ${msg}`);
         sbInfo.backgroundColor = undefined;
         const doc = await vscode.workspace.openTextDocument(rootUri);
-        const editor = await vscode.window.showTextDocument(doc);
+        const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
         await runSingleFile(editor, rootFileContext);
         return;
     }
@@ -168,7 +168,7 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
     activeGraphPanel.onNodeClick(async (filePath) => {
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
-            await vscode.window.showTextDocument(doc, { preserveFocus: false });
+            await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: false });
         }
         catch (e) {
             log(`[graph] Cannot open ${filePath}: ${e}`);
@@ -201,6 +201,8 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
                 multiFileStop = true;
                 activeSession?.stop();
                 activeSession = null;
+                activeGraphPanel?.dispose();
+                activeGraphPanel = null;
                 setRunning(false);
                 break;
         }
@@ -218,11 +220,11 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
             continue;
         }
         seen.add(node.id);
-        // Open file
+        // Open file — always in column One so the graph panel never gets pushed aside
         let editor;
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(node.file));
-            editor = await vscode.window.showTextDocument(doc);
+            editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
         }
         catch (e) {
             log(`[graph] Cannot open ${node.relativePath}: ${e}`);
@@ -636,6 +638,8 @@ function activate(context) {
             activeSession.stop();
             activeSession = null;
         }
+        activeGraphPanel?.dispose();
+        activeGraphPanel = null;
         setRunning(false);
         log("[session] Stopped by user");
     });
