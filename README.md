@@ -6,9 +6,9 @@
 > **What if your codebase had a Netflix narrator?**
 
 Walkthrough is a VS Code extension that turns any TypeScript or Python project into a guided, voice-narrated code tour. Block by block, file by file — with highlights, subtitles, and an AI that actually understands your code.
+<img width="1919" height="1079" alt="Main" src="https://github.com/user-attachments/assets/3f8f099c-63d9-4ff8-a04d-b25895652239" />
 
 ---
-
 ## What it does
 
 You open a project, press play, and a senior-developer voice walks you through every function, class, and module — explaining what it does, why it exists, and how it fits the bigger picture. Like a documentary, but for code.
