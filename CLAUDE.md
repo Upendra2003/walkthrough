@@ -6,16 +6,15 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 | File | Role |
 |---|---|
-| `src/extension.ts` | `activate()` — commands, control bar, indexing gate, multi-file orchestrator |
+| `src/extension.ts` | `activate()` — commands, status-bar info item, indexing gate, multi-file orchestrator |
 | `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order |
-| `src/graphPanel.ts` | WebviewPanel KG — renders file tree with pending/active/completed/skipped status |
+| `src/graphPanel.ts` | Unified right panel (WebviewPanel) — file tree (top, scrollable) + subtitle zone (middle, fixed 88px) + video controls (bottom). Messages: `update`, `subtitle`, `subtitle-loading`, `subtitle-hide`, `subtitle-language`, `set-paused`. Receives: `navigate`, `control`, `toggle-language`. |
 | `src/parser.ts` | `parseBlocks(source, langId)` — tree-sitter for TS + Python; returns `SemanticBlock[]` |
 | `src/narrate.ts` | `fetchNarration` (LLM), `generateAudio` (Sarvam TTS), `queryCodebase` (Qdrant RAG), `fetchDeepDiveNarrations` |
-| `src/session.ts` | `WalkthroughSession` — playback loop, pause/resume, prefetch, subtitles, deep dive, Q&A (speaks answer) |
+| `src/session.ts` | `WalkthroughSession` — playback loop, pause/resume (word-level resume), prefetch, subtitles, deep dive, Q&A (speaks answer) |
 | `src/audioPlayer.ts` | Spawns `afplay` / PowerShell `SoundPlayer` / `aplay`; `stop()` kills the process |
 | `src/embedder.ts` | `embed(texts, cfg)` — Jina AI (`jina-embeddings-v2-base-code`, 768 dims) or OpenAI (`text-embedding-3-small`, 1536 dims) |
 | `src/codebaseIndexer.ts` | `indexWorkspace` — scans workspace, embeds blocks, upserts into Qdrant; `needsIndexing` — sync hash-cache pre-check (no network) |
-| `src/subtitlePanel.ts` | WebviewView in panel area — `show(text, loading?)` / `hide()` / `focus()` |
 | `src/config.ts` | `ConfigManager` — SecretStorage + VS Code settings; `WalkthroughConfig` shape; model catalogues |
 | `src/onboarding.ts` | 4-step setup wizard webview — Provider → API Key + Model → Voice + Jina → Done |
 
@@ -25,16 +24,22 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 **Indexing gate (every session start):**
 1. `needsIndexing(wsRoot, cfg)` — sync, reads `.vscode/walkthrough-vector-cache.json`, hashes all `.ts`/`.py` files. Zero network calls.
-2. If unchanged → shows `✓ Codebase knowledge is up to date.` and skips to walkthrough.
-3. If changed → `runIndexingWithUI` → subtitle cycles vibe messages (phase 1: connecting) then live file progress `⚡ src/parser.ts — 45% (9/20 files)` (phase 2) → cinematic finale → hide.
+2. If unchanged → posts `{ type: 'subtitle', words: [...], activeIndex: -1 }` showing "✓ Codebase knowledge is up to date." in the graph panel subtitle zone, then hides after 1.4 s.
+3. If changed → `runIndexingWithUI` → posts `subtitle-loading` then cycling vibe messages (phase 1) then live file progress (phase 2) → cinematic finale messages → `subtitle-hide`.
 
 **Codebase indexing:** `indexWorkspace` scans files, hashes for incremental cache, embeds blocks in batches of 10 via Jina/OpenAI, upserts into Qdrant collection `code_blocks`. Cache stored at `.vscode/walkthrough-vector-cache.json`.
 
 **Q&A flow (Q key):** session pauses → user types question → `queryCodebase` embeds question → Qdrant vector search (top 5 blocks, score ≥ 0.25) → LLM answers with RAG context → **`generateAudio` + `AudioPlayer` speaks the answer** → subtitle word-by-word animation in sync → Space resumes walkthrough.
 
-**Pause fix:** `playWithControls` loops — killing the audio process resolves `play()` with `"next"`, but `this.paused` is true so `continue` replays the clip instead of advancing.
+**Pause/resume word fix:** `togglePause()` kills the audio player and calls `cancelSubtitleAnimation()`, which now returns the last displayed word index (stored in `subtitleResumeIndex`). When `playWithControls` loops back after `waitForResume()`, it calls `startSubtitleAnimation(text, subtitleResumeIndex)` so the subtitle continues from the exact word it stopped at — not from the beginning. `subtitleResumeIndex` is reset to 0 at the top of each `playWithControls` call so each new block/chunk starts fresh.
 
-**Subtitles:** `after` decoration on the block's last line. Font injected via `textDecoration` CSS trick. Shows `⏳ Preparing...` while fetching, then word-by-word animation during playback.
+**Subtitles (sliding window):** `graphPanel.ts` webview renders a 10-word chunk around the current `activeIndex`. When `activeIndex` crosses a chunk boundary (every 10 words), the display snaps to the next chunk — like real subtitles. The subtitle zone is a fixed 88px tall container; content never overflows. For non-animated messages (indexing vibes, `activeIndex = -1`), all words render as plain text at 75% opacity.
+
+**Video controls:** `graphPanel.ts` hosts a `#controls-bar` row at the bottom (⏮ ⏸ ⏭ | Skip Dive File Ask ⏹). Button clicks post `{ type: 'control', action }` to the extension. `GraphPanel.onControl(cb)` wires the handler. `GraphPanel.postMessage({ type: 'set-paused', paused })` flips the ⏸/▶ icon. Status bar button items have been removed — the panel is the single control surface.
+
+**Stop / close:** `walkthrough.stop` (Esc) and the in-panel ⏹ button both call `activeGraphPanel?.dispose()` so the codebase map panel closes automatically.
+
+**No screen split:** all `showTextDocument` calls in `runMultiFileWalkthrough` pass `{ viewColumn: vscode.ViewColumn.One }` — code always opens in column 1, graph panel always stays in column 2.
 
 **Prefetch:** block N+1 audio is fetched while block N plays. `narrationCache` stores narration text (available before TTS) for subtitles.
 

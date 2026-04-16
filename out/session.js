@@ -31,7 +31,12 @@ class WalkthroughSession {
         this.prefetchCache = new Map();
         this.narrationCache = new Map();
         // ── Subtitle animation handle ─────────────────────────────────────────────
+        // Returning () => number so cancelSubtitleAnimation() can report the last
+        // displayed word index to the pause handler.
         this.subtitleStopFn = null;
+        // Word index saved at the moment of pause — handed back to the next
+        // startSubtitleAnimation() call so the subtitle resumes mid-sentence.
+        this.subtitleResumeIndex = 0;
         this.log = callbacks.log;
         this.setStatus = callbacks.setStatus;
         this.clearStatus = callbacks.clearStatus;
@@ -85,7 +90,9 @@ class WalkthroughSession {
         if (this.paused) {
             this.log("  ⏸  Paused");
             this.currentPlayer?.stop();
-            this.cancelSubtitleAnimation();
+            // Save the word index BEFORE the animation closure is cleared,
+            // so playWithControls can resume from this exact word on the next loop.
+            this.subtitleResumeIndex = this.cancelSubtitleAnimation();
             this.setPaused?.(true);
         }
         else {
@@ -344,17 +351,21 @@ class WalkthroughSession {
     // ── Subtitle animation ────────────────────────────────────────────────────
     /**
      * Kick off a word-by-word subtitle animation.
-     * Sends the full word array with an advancing activeIndex every SUBTITLE_WORD_MS ms.
-     * The webview renders done / active / pending classes on each span.
-     * Stopped automatically when playWithControls exits.
+     *
+     * @param text      Full narration text for this block.
+     * @param fromIndex Word index to start from (0 on first play, saved index on resume).
+     *
+     * The closure captures `activeIndex` so that cancelSubtitleAnimation() can
+     * return it, letting the pause handler snapshot exactly which word was last
+     * shown before the audio was killed.
      */
-    startSubtitleAnimation(text) {
+    startSubtitleAnimation(text, fromIndex = 0) {
         this.cancelSubtitleAnimation();
         const words = text.trim().split(/\s+/).filter(Boolean);
         if (words.length === 0)
             return;
         let stopped = false;
-        let activeIndex = 0;
+        let activeIndex = Math.min(fromIndex, words.length - 1);
         const advance = () => {
             if (stopped || this.stopped)
                 return;
@@ -362,7 +373,6 @@ class WalkthroughSession {
                 this.showSubtitleWords(words, activeIndex);
             }
             else {
-                // Fallback for callers that only wire showSubtitle
                 this.showSubtitle?.(words.slice(0, activeIndex + 1).join(" "));
             }
             if (activeIndex < words.length - 1) {
@@ -371,11 +381,14 @@ class WalkthroughSession {
             }
         };
         advance();
-        this.subtitleStopFn = () => { stopped = true; };
+        // Return the current activeIndex so callers can snapshot it on pause.
+        this.subtitleStopFn = () => { stopped = true; return activeIndex; };
     }
+    /** Cancel the running animation and return the last displayed word index. */
     cancelSubtitleAnimation() {
-        this.subtitleStopFn?.();
+        const idx = this.subtitleStopFn ? this.subtitleStopFn() : 0;
         this.subtitleStopFn = null;
+        return idx;
     }
     clearSubtitle() {
         this.cancelSubtitleAnimation();
@@ -385,14 +398,18 @@ class WalkthroughSession {
     /**
      * Play `audio` with full pause / skip / deep-dive control.
      *
-     * Loop fix: when togglePause() kills the audio process, play() resolves with
-     * "next" immediately.  The `this.paused` check catches this and loops back
-     * to waitForResume() + replay instead of advancing to the next block.
-     *
-     * Subtitle: word-by-word animation starts at the top of each loop iteration
-     * (each time audio actually begins playing) and is cancelled on stop/skip.
+     * Pause/resume word fix:
+     *   togglePause() kills the audio process → play() resolves "next" → paused=true.
+     *   Before that, togglePause() calls cancelSubtitleAnimation() which snapshots
+     *   the last displayed word index into this.subtitleResumeIndex.
+     *   On the next loop iteration (after waitForResume), startSubtitleAnimation()
+     *   is called with that saved index so the subtitle continues mid-sentence.
+     *   The index is reset to 0 at the top of this method so each new block/chunk
+     *   starts fresh.
      */
     async playWithControls(audio, subtitleText) {
+        // Reset resume position for each new audio clip (new block or deep-dive chunk).
+        this.subtitleResumeIndex = 0;
         for (;;) {
             await this.waitForResume();
             if (this.stopped)
@@ -404,18 +421,22 @@ class WalkthroughSession {
                 this.pendingSkip = null;
                 return dir;
             }
-            // Start subtitle animation aligned with audio start
-            this.startSubtitleAnimation(subtitleText);
+            // Start (or resume) subtitle from the saved word position.
+            // First play: subtitleResumeIndex = 0.
+            // After pause/resume: subtitleResumeIndex = word where audio was paused.
+            this.startSubtitleAnimation(subtitleText, this.subtitleResumeIndex);
             const player = new audioPlayer_1.AudioPlayer();
             this.currentPlayer = player;
             const skipPromise = new Promise(r => { this.skipResolve = r; });
             const audioPromise = player.play(audio).then(() => "next");
             const result = await Promise.race([audioPromise, skipPromise]);
+            // togglePause() already called cancelSubtitleAnimation() and saved the index.
+            // Call again to clear the ref (safe no-op if already cancelled).
             this.cancelSubtitleAnimation();
             player.stop();
             this.currentPlayer = null;
             this.skipResolve = null;
-            // Audio ended because pause killed the process → wait and replay
+            // Audio ended because pause killed the process → wait and replay from saved word.
             if (result === "next" && this.paused) {
                 continue;
             }

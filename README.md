@@ -22,14 +22,15 @@ You are never just reading. You are watching, listening, and asking.
 | Feature | How to use |
 |---|---|
 | **Voice narration** | Plays automatically, block by block |
-| **Netflix-style subtitles** | Word-by-word animation in sync with audio |
-| **Pause / Resume** | `Space` |
+| **Netflix-style subtitles** | Word-by-word animation — sliding 10-word window, stays in sync |
+| **Pause / Resume** | `Space` or the ⏸ button — resumes from the exact word it stopped at |
 | **Skip block** | `→` or `S` |
 | **Go back** | `←` |
 | **Deep Dive** | `D` — line-by-line walkthrough of any block |
 | **Ask anything** | `Q` — ask a question, get a spoken answer from your codebase |
 | **Skip file** | `F` — jump to the next file in the import graph |
-| **Stop** | `Esc` |
+| **Stop** | `Esc` — stops walkthrough and closes the codebase map panel |
+| **In-panel controls** | ⏮ ⏸ ⏭ + Skip · Dive · File · Ask · Stop — always visible in the graph panel |
 
 ### Ask (Q&A)
 Press `Q` at any point. Type your question. The extension embeds it, searches your indexed codebase in Qdrant, retrieves the most relevant code blocks, and speaks the answer back to you — with the matching code highlighted in the editor.
@@ -102,16 +103,15 @@ QDRANT_API_KEY=...
 ## Architecture
 
 ```
-extension.ts        activation, commands, control bar, indexing UI
+extension.ts        activation, commands, status bar info, indexing UI
 ├── graph.ts        import graph builder (DFS traversal order)
-├── graphPanel.ts   live knowledge graph webview panel
+├── graphPanel.ts   unified right panel — file tree + subtitle zone + video controls
 ├── parser.ts       tree-sitter semantic block parser (TS + Python)
-├── session.ts      playback engine — pause, skip, deep dive, Q&A
+├── session.ts      playback engine — pause/resume (word-level), skip, deep dive, Q&A
 ├── narrate.ts      LLM narration, Sarvam TTS, Qdrant Q&A (RAG)
 ├── embedder.ts     Jina AI / OpenAI embedding API
 ├── codebaseIndexer.ts  workspace scanner + Qdrant vector upsert
 ├── audioPlayer.ts  cross-platform audio (PowerShell / afplay / aplay)
-├── subtitlePanel.ts    subtitle webview in the VS Code panel area
 ├── onboarding.ts   setup wizard (4-step webview)
 └── config.ts       SecretStorage + VS Code settings manager
 ```
