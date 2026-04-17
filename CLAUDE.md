@@ -8,11 +8,11 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 |---|---|
 | `src/extension.ts` | `activate()` — commands, status-bar info item, indexing gate, multi-file orchestrator |
 | `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order |
-| `src/graphPanel.ts` | Unified right panel (WebviewPanel) — file tree (top, scrollable) + subtitle zone (middle, fixed 88px) + video controls (bottom). Messages: `update`, `subtitle`, `subtitle-loading`, `subtitle-hide`, `subtitle-language`, `set-paused`. Receives: `navigate`, `control`, `toggle-language`. |
+| `src/graphPanel.ts` | Unified right panel (WebviewPanel) — file tree (top, scrollable) + subtitle zone (middle, fixed 88px, no lang tag) + progress line (3px, pure `#FF0000`) + video controls (bottom). Messages: `update`, `subtitle` (with `intervalMs`), `subtitle-loading`, `subtitle-hide`, `subtitle-language`, `set-paused`. Receives: `navigate`, `control` (`prev\|pause\|next\|deep-dive\|ask\|skip-file\|stop\|vol-<0-100>\|lang-<code>`). |
 | `src/parser.ts` | `parseBlocks(source, langId)` — tree-sitter for TS + Python; returns `SemanticBlock[]` |
 | `src/narrate.ts` | `fetchNarration` (LLM), `generateAudio` (Sarvam TTS), `queryCodebase` (Qdrant RAG), `fetchDeepDiveNarrations` |
 | `src/session.ts` | `WalkthroughSession` — playback loop, pause/resume (word-level resume), prefetch, subtitles, deep dive, Q&A (speaks answer) |
-| `src/audioPlayer.ts` | Spawns `afplay` / PowerShell `SoundPlayer` / `aplay`; `stop()` kills the process |
+| `src/audioPlayer.ts` | Spawns `afplay` / PowerShell `SoundPlayer` / `aplay`; `stop()` kills the process. `AudioPlayer.volume` static (0–100, default 80) — read at play-time; set by the volume slider without restarting playback. |
 | `src/embedder.ts` | `embed(texts, cfg)` — Jina AI (`jina-embeddings-v2-base-code`, 768 dims) or OpenAI (`text-embedding-3-small`, 1536 dims) |
 | `src/codebaseIndexer.ts` | `indexWorkspace` — scans workspace, embeds blocks, upserts into Qdrant; `needsIndexing` — sync hash-cache pre-check (no network) |
 | `src/config.ts` | `ConfigManager` — SecretStorage + VS Code settings; `WalkthroughConfig` shape; model catalogues |
@@ -31,11 +31,17 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 **Q&A flow (Q key):** session pauses → user types question → `queryCodebase` embeds question → Qdrant vector search (top 5 blocks, score ≥ 0.25) → LLM answers with RAG context → **`generateAudio` + `AudioPlayer` speaks the answer** → subtitle word-by-word animation in sync → Space resumes walkthrough.
 
-**Pause/resume word fix:** `togglePause()` kills the audio player and calls `cancelSubtitleAnimation()`, which now returns the last displayed word index (stored in `subtitleResumeIndex`). When `playWithControls` loops back after `waitForResume()`, it calls `startSubtitleAnimation(text, subtitleResumeIndex)` so the subtitle continues from the exact word it stopped at — not from the beginning. `subtitleResumeIndex` is reset to 0 at the top of each `playWithControls` call so each new block/chunk starts fresh.
+**Pause/resume word fix:** `togglePause()` kills the audio player and calls `cancelSubtitleAnimation()`, which now returns the last displayed word index (stored in `subtitleResumeIndex`). When `playWithControls` loops back after `waitForResume()`, it calls `startSubtitleAnimation(text, subtitleResumeIndex, wordIntervalMs)` so the subtitle continues from the exact word it stopped at — not from the beginning. `subtitleResumeIndex` is reset to 0 at the top of each `playWithControls` call so each new block/chunk starts fresh.
 
-**Subtitles (sliding window):** `graphPanel.ts` webview renders a 10-word chunk around the current `activeIndex`. When `activeIndex` crosses a chunk boundary (every 10 words), the display snaps to the next chunk — like real subtitles. The subtitle zone is a fixed 88px tall container; content never overflows. For non-animated messages (indexing vibes, `activeIndex = -1`), all words render as plain text at 75% opacity.
+**Audio/subtitle sync:** `estimateWordIntervalMs(audio, wordCount)` reads the WAV header (`byteRate` at offset 28, `dataChunkSize` at offset 40) to derive exact audio duration, then divides by word count. Clamped to [80, 900] ms. Falls back to `SUBTITLE_WORD_MS_FALLBACK = 420ms` on malformed headers. This value is passed as `wordIntervalMs` through `startSubtitleAnimation` → `showSubtitleWords` callback → `{ type:'subtitle', intervalMs }` message → `setProgress(pct, intervalMs)` in the webview, so the CSS transition on the red progress bar matches the actual TTS pace exactly.
 
-**Video controls:** `graphPanel.ts` hosts a `#controls-bar` row at the bottom (⏮ ⏸ ⏭ | Skip Dive File Ask ⏹). Button clicks post `{ type: 'control', action }` to the extension. `GraphPanel.onControl(cb)` wires the handler. `GraphPanel.postMessage({ type: 'set-paused', paused })` flips the ⏸/▶ icon. Status bar button items have been removed — the panel is the single control surface.
+**Volume control:** `AudioPlayer.volume` (0–100, default 80) is a static field read at play-time. The volume slider in the panel posts `{ type:'control', action:'vol-<level>' }`; `extension.ts` sets `AudioPlayer.volume` immediately — takes effect on the next block without killing the current player. Platform implementation: macOS → `afplay -v <0.0–1.0>`; Windows → PowerShell spawns winmm.dll `waveOutSetVolume` P/Invoke then SoundPlayer; Linux → no volume control (aplay has no volume flag).
+
+**Subtitles (sliding window):** `graphPanel.ts` webview renders a 10-word chunk around the current `activeIndex`. When `activeIndex` crosses a chunk boundary (every 10 words), the display snaps to the next chunk — like real subtitles. The subtitle zone is a fixed 88px tall container with no lang tag; content never overflows. For non-animated messages (indexing vibes, `activeIndex = -1`), all words render as plain text at 72% opacity. Supported font classes: `devanagari` (Hindi), `tamil`, `kannada`, `telugu`.
+
+**Language picker:** Subtitle icon in the controls bar opens a dropdown (English / Hindi / Kannada / Telugu). Selecting a language posts `{ type:'control', action:'lang-<code>' }` and applies the matching font class to `#subtitle-words`. The old `toggle-language` webview message and `#lang-tag` element have been removed.
+
+**Video controls layout:** `#controls-bar` has two clusters — LEFT: `[⏮ prev] [⏸/▶ pause] [⏭ next]`; RIGHT: `[DeepDive] [Volume▲] [Lang▲] [? Ask] | [▶ Next File] [⏹ Stop]`. Volume and language open popover pickers above the bar. The `Skip` text button has been removed. Button clicks post `{ type:'control', action }` to the extension. `GraphPanel.postMessage({ type:'set-paused', paused })` swaps the pause/play icon. Status bar buttons have been removed — the panel is the single control surface.
 
 **Stop / close:** `walkthrough.stop` (Esc) and the in-panel ⏹ button both call `activeGraphPanel?.dispose()` so the codebase map panel closes automatically.
 
@@ -50,7 +56,6 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 | `Ctrl+Shift+E` / title button | Start / restart |
 | `Space` | Pause / Resume |
 | `←` / `→` | Prev / Next block |
-| `S` / `Ctrl+Shift+.` | Skip block (or line in deep dive) |
 | `D` / `Ctrl+Shift+I` | Deep Dive — line-by-line with amber highlights |
 | `F` / `Ctrl+Shift+,` | Skip file → next file in graph |
 | `Q` / `Ctrl+Shift+/` | Ask (Qdrant RAG → spoken answer) |

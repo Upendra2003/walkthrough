@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npm install:*)",
       "Bash(npm run:*)",
-      "WebFetch(domain:docs.sarvam.ai)"
+      "WebFetch(domain:docs.sarvam.ai)",
+      "Bash(python -c ' *)"
     ]
   }
 }

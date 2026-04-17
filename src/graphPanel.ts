@@ -1,26 +1,29 @@
 /**
  * GraphPanel — unified right-panel WebviewPanel.
  *
- * Three zones stacked in a flex column:
- *   1. #graph-section   — scrollable file tree          (flex: 1)
- *   2. #subtitle-section — fixed-height subtitle zone   (88px)
- *   3. #progress-track  — animated read-line            (3px, amber glow)
- *   4. #controls-bar    — video-player controls         (~52px)
+ * Layout (flex column, 100vh):
+ *   1. #graph-section    — scrollable file tree           (flex: 1)
+ *   2. #subtitle-section — fixed-height subtitle zone     (88px, no lang tag)
+ *   3. #progress-track   — animated read-line             (3px, pure #FF0000)
+ *   4. #controls-bar     — video-player controls
  *
  * Font: Source Sans 3 (Google Fonts)
  *
+ * Controls layout:
+ *   LEFT  — [LeftSkip] [Pause/Play] [RightSkip]
+ *   RIGHT — [Volume/DeepDive] [Subtitle/LangPicker] [?/Ask] | [▶ Next File] [⏹]
+ *
  * Extension → webview:
  *   { type:'update', tree }
- *   { type:'subtitle', words, activeIndex }   ← also drives the progress bar
+ *   { type:'subtitle', words, activeIndex }
  *   { type:'subtitle-loading' }
  *   { type:'subtitle-hide' }
  *   { type:'subtitle-language', code, label }
- *   { type:'set-paused', paused }             ← swaps play/pause icon
+ *   { type:'set-paused', paused }
  *
  * Webview → extension:
  *   { type:'navigate', file }
- *   { type:'control',  action }   prev|pause|next|skip|deep-dive|skip-file|ask|stop
- *   { type:'toggle-language' }
+ *   { type:'control', action }   prev|pause|next|deep-dive|ask|skip-file|stop|lang-en|lang-hi|lang-kn|lang-te
  */
 
 import * as vscode from "vscode";
@@ -168,7 +171,7 @@ function serializeNode(n: FileNode): SerialNode {
 function buildHtml(root: FileNode, cspSource: string, icons: IconSet): string {
   const initialJson = JSON.stringify(serializeNode(root)).replace(/</g, "\\u003c");
   const pythonSvgJs = JSON.stringify(PYTHON_SVG);
-  const iconsJs     = JSON.stringify(icons);   // embedded so JS can swap pause/play src
+  const iconsJs     = JSON.stringify(icons);
 
   return `<!DOCTYPE html>
 <html lang="en">
@@ -180,9 +183,10 @@ function buildHtml(root: FileNode, cspSource: string, icons: IconSet): string {
 @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Kannada:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Telugu:wght@400;500&display=swap');
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
-
 html, body { height: 100%; overflow: hidden; }
 
 body {
@@ -196,7 +200,7 @@ body {
   user-select: none;
 }
 
-/* ════════════════════════════ Graph section ════════════════════════════ */
+/* ════ Graph section ════ */
 #graph-section {
   flex: 1;
   overflow-y: auto;
@@ -224,10 +228,8 @@ body {
   font-size: 10px;
   color: var(--vscode-descriptionForeground, #6c7086);
   font-style: italic;
-  letter-spacing: 0.02em;
 }
 
-/* ── File rows ── */
 .node-row {
   display: flex;
   align-items: center;
@@ -250,7 +252,6 @@ body {
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
   min-width: 18px;
-  letter-spacing: 0.03em;
   font-weight: 500;
 }
 .node-row.active    .chapter-num { color: rgba(249,226,175,0.45); }
@@ -266,11 +267,8 @@ body {
 
 .filename {
   flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 12.5px;
-  font-weight: 400;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 12.5px; font-weight: 400;
 }
 .node-row.active    .filename { color: #f9e2af; font-weight: 600; }
 .node-row.completed .filename { color: #a6e3a1; }
@@ -288,10 +286,7 @@ body {
   border-top: 1px solid rgba(255,255,255,0.05);
   font-size: 10px;
   color: var(--vscode-descriptionForeground, #6c7086);
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  font-weight: 400;
+  display: flex; flex-wrap: wrap; gap: 10px;
 }
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
@@ -300,18 +295,17 @@ body {
 .dot-skipped { background: #6c7086; }
 .dot-pending { background: #3b3d52; }
 
-/* ════════════════════════════ Subtitle section ════════════════════════════ */
+/* ════ Subtitle section (no lang tag) ════ */
 #subtitle-section {
   flex-shrink: 0;
   height: 88px;
   overflow: hidden;
   border-top: 0.5px solid rgba(255,255,255,0.07);
   background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.78) 100%);
-  position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 14px 20px 10px;
+  padding: 12px 20px;
   transition: opacity 0.25s ease;
 }
 #subtitle-section.hidden {
@@ -322,33 +316,18 @@ body {
   border-top-width: 0;
 }
 
-#lang-tag {
-  position: absolute;
-  top: 6px; right: 10px;
-  font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
-  color: rgba(255,255,255,0.25);
-  cursor: pointer;
-  padding: 2px 5px;
-  border-radius: 3px;
-  border: 1px solid rgba(255,255,255,0.09);
-  transition: color 0.15s, border-color 0.15s;
-  font-family: 'Source Sans 3', sans-serif;
-}
-#lang-tag:hover { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.22); }
-
 #subtitle-inner { width: 100%; text-align: center; overflow: hidden; }
 
 #subtitle-words {
   font-family: 'Source Sans 3', system-ui, sans-serif;
-  font-size: 15px;
-  font-weight: 400;
-  line-height: 1.55;
+  font-size: 15px; font-weight: 400; line-height: 1.55;
   color: white;
-  word-break: break-word;
-  overflow-wrap: break-word;
+  word-break: break-word; overflow-wrap: break-word;
 }
 #subtitle-words.devanagari { font-family: 'Noto Sans Devanagari', 'Source Sans 3', sans-serif; }
 #subtitle-words.tamil      { font-family: 'Noto Sans Tamil',       'Source Sans 3', sans-serif; }
+#subtitle-words.kannada    { font-family: 'Noto Sans Kannada',     'Source Sans 3', sans-serif; }
+#subtitle-words.telugu     { font-family: 'Noto Sans Telugu',      'Source Sans 3', sans-serif; }
 
 .word { display: inline; transition: opacity 0.12s ease; }
 .word.done    { opacity: 0.35; color: white; }
@@ -358,8 +337,7 @@ body {
 #subtitle-loading-msg {
   font-family: 'Source Sans 3', sans-serif;
   font-size: 12px; font-weight: 300;
-  color: rgba(255,255,255,0.28);
-  font-style: italic;
+  color: rgba(255,255,255,0.28); font-style: italic;
   display: none;
 }
 @keyframes subtitlePulse {
@@ -371,42 +349,24 @@ body {
   animation: subtitlePulse 1.6s ease infinite;
 }
 
-/* ════════════════════════════ Progress / read-line ════════════════════════════ */
+/* ════ Progress / read-line — pure #FF0000, no glow ════ */
 #progress-track {
   flex-shrink: 0;
   height: 3px;
   background: rgba(255,255,255,0.05);
   position: relative;
-  overflow: visible;
 }
 #progress-fill {
   position: absolute;
   top: 0; left: 0;
   height: 100%;
   width: 0%;
-  /* Amber-to-warm-white gradient — feels like a warm spotlight sweeping the bar */
-  background: linear-gradient(90deg, #c97f1a 0%, #f9e2af 85%, #fff8e7 100%);
-  border-radius: 0 2px 2px 0;
-  /* transition matches SUBTITLE_WORD_MS (450ms) → the bar flows continuously */
+  background: #FF0000;
+  /* transition matches SUBTITLE_WORD_MS = 450ms → bar flows continuously */
   transition: width 0.45s linear;
-  /* Glow: two layered shadows so it bleeds above and below the 3px rail */
-  box-shadow:
-    0 0 6px 1px rgba(249,226,175,0.55),
-    0 0 14px 2px rgba(249,200,100,0.22);
-}
-/* Bright dot at the leading edge */
-#progress-fill::after {
-  content: '';
-  position: absolute;
-  right: -3px; top: 50%;
-  transform: translateY(-50%);
-  width: 7px; height: 7px;
-  border-radius: 50%;
-  background: #fff8e7;
-  box-shadow: 0 0 6px 2px rgba(249,226,175,0.8);
 }
 
-/* ════════════════════════════ Controls bar ════════════════════════════ */
+/* ════ Controls bar ════ */
 #controls-bar {
   flex-shrink: 0;
   display: flex;
@@ -416,85 +376,173 @@ body {
   gap: 4px;
 }
 
-/* Primary playback — left cluster */
 #ctrl-primary {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  display: flex; align-items: center; gap: 2px;
 }
-
-/* Utility row — right cluster */
 #ctrl-secondary {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+  display: flex; align-items: center; gap: 2px;
   margin-left: auto;
 }
 
-/* Icon button base */
+/* Base icon button */
 .icon-btn {
   background: none;
   border: none;
   cursor: pointer;
   padding: 5px 6px;
   border-radius: 6px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: flex; align-items: center; justify-content: center;
   opacity: 0.6;
   transition: opacity 0.14s, background 0.14s;
   flex-shrink: 0;
 }
 .icon-btn:hover { opacity: 1; background: rgba(255,255,255,0.09); }
-
-/* Standard icon size */
 .icon-btn img { width: 20px; height: 20px; object-fit: contain; display: block; }
 
-/* Pause/play — slightly larger */
-#btn-pause        { opacity: 0.88; padding: 4px 10px; }
-#btn-pause:hover  { opacity: 1; }
-#btn-pause img    { width: 28px; height: 28px; }
+/* Pause/play — 24px */
+#btn-pause       { opacity: 0.88; padding: 4px 10px; }
+#btn-pause:hover { opacity: 1; }
+#btn-pause img   { width: 24px; height: 24px; }
 
 /* Small utility icon buttons */
-.icon-btn-sm img  { width: 17px; height: 17px; }
+.icon-btn-sm img { width: 17px; height: 17px; }
 
-/* Thin vertical separator */
+/* Thin separator */
 .ctrl-sep {
-  width: 1px;
-  height: 16px;
+  width: 1px; height: 16px;
   background: rgba(255,255,255,0.09);
-  flex-shrink: 0;
-  margin: 0 4px;
+  flex-shrink: 0; margin: 0 4px;
 }
 
-/* Text-label utility buttons */
-.ctrl-text {
-  background: none;
-  border: none;
-  cursor: pointer;
-  color: rgba(255,255,255,0.32);
+/* ── Volume picker ── */
+.vol-wrap { position: relative; }
+
+#vol-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(18,18,30,0.97);
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 8px;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  z-index: 200;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.55);
+  min-width: 130px;
+}
+#vol-picker.hidden { display: none; }
+
+#vol-label {
   font-family: 'Source Sans 3', sans-serif;
   font-size: 11px;
-  font-weight: 400;
-  padding: 3px 7px;
-  border-radius: 4px;
-  white-space: nowrap;
-  transition: color 0.12s, background 0.12s;
-  line-height: 1.2;
+  font-weight: 600;
+  color: rgba(255,255,255,0.55);
+  letter-spacing: 0.04em;
 }
-.ctrl-text:hover { color: rgba(255,255,255,0.82); background: rgba(255,255,255,0.08); }
 
+#vol-slider {
+  width: 100px;
+  cursor: pointer;
+  accent-color: #f9e2af;
+  height: 4px;
+}
+
+/* ── Language picker ── */
+.lang-wrap { position: relative; }
+
+#lang-picker {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  right: 0;
+  background: rgba(18, 18, 30, 0.97);
+  border: 1px solid rgba(255,255,255,0.13);
+  border-radius: 8px;
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 120px;
+  z-index: 200;
+  /* subtle shadow */
+  box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+}
+#lang-picker.hidden { display: none; }
+.lang-opt {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.65);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12.5px;
+  font-weight: 400;
+  padding: 6px 12px;
+  border-radius: 5px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+.lang-opt:hover   { background: rgba(255,255,255,0.09); color: white; }
+.lang-opt.active  { color: #f9e2af; background: rgba(249,226,175,0.1); font-weight: 600; }
+
+/* ── Question mark (Ask) ── */
+.ctrl-ask {
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.45);
+  font-size: 16px; font-weight: 700;
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-family: 'Source Sans 3', sans-serif;
+  line-height: 1;
+  transition: color 0.12s, background 0.12s;
+}
+.ctrl-ask:hover { color: white; background: rgba(255,255,255,0.09); }
+
+/* ── Next File rectangle button ── */
+#btn-next-file {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 11px 4px 9px;
+  background: rgba(255,255,255,0.9);
+  border: none;
+  border-radius: 5px;
+  cursor: pointer;
+  color: #111;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 11.5px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  transition: background 0.12s;
+  flex-shrink: 0;
+}
+#btn-next-file:hover { background: #ffffff; }
+/* Black play triangle inside the button */
+.next-tri {
+  width: 0; height: 0;
+  border-style: solid;
+  border-width: 5px 0 5px 9px;
+  border-color: transparent transparent transparent #111111;
+  flex-shrink: 0;
+}
+
+/* ── Stop ── */
 .ctrl-stop {
+  background: none; border: none; cursor: pointer;
   color: rgba(220,70,70,0.4);
   font-size: 14px;
-  padding: 3px 5px;
+  padding: 3px 5px; border-radius: 5px;
+  transition: color 0.12s, background 0.12s;
 }
 .ctrl-stop:hover { color: rgba(220,70,70,0.9); background: rgba(220,70,70,0.1); }
 </style>
 </head>
 <body>
 
-<!-- ① Scrollable file tree -->
+<!-- ① File tree -->
 <div id="graph-section">
   <div id="header">
     <h2>&#x2B21; Codebase Map</h2>
@@ -509,16 +557,15 @@ body {
   </div>
 </div>
 
-<!-- ② Subtitle zone -->
+<!-- ② Subtitle (no lang tag) -->
 <div id="subtitle-section" class="hidden">
-  <span id="lang-tag">EN</span>
   <div id="subtitle-inner">
     <div id="subtitle-words"></div>
     <div id="subtitle-loading-msg"></div>
   </div>
 </div>
 
-<!-- ③ Animated read-line -->
+<!-- ③ Progress read-line -->
 <div id="progress-track">
   <div id="progress-fill"></div>
 </div>
@@ -526,7 +573,7 @@ body {
 <!-- ④ Video-player controls -->
 <div id="controls-bar">
 
-  <!-- Primary: ← pause → -->
+  <!-- Left: prev / pause / next -->
   <div id="ctrl-primary">
     <button class="icon-btn" data-action="prev" title="Previous block  \u2190">
       <img src="${icons.leftSkip}" alt="Prev">
@@ -539,22 +586,53 @@ body {
     </button>
   </div>
 
-  <!-- Secondary: utility icons + text labels -->
+  <!-- Right: utilities -->
   <div id="ctrl-secondary">
-    <button class="icon-btn icon-btn-sm" data-action="deep-dive" title="Deep Dive  D">
-      <img src="${icons.volume}" alt="Deep Dive">
-    </button>
-    <button class="icon-btn icon-btn-sm" data-action="ask" title="Ask Q&amp;A  Q">
-      <img src="${icons.subtitle}" alt="Ask">
-    </button>
-    <button class="icon-btn icon-btn-sm" data-action="skip-file" title="Skip File  F">
-      <img src="${icons.backPlay}" alt="Skip File">
-    </button>
-    <div class="ctrl-sep"></div>
-    <button class="ctrl-text" data-action="skip" title="Skip block  S">Skip</button>
-    <button class="ctrl-text ctrl-stop" data-action="stop" title="Stop  Esc">&#x23F9;</button>
-  </div>
 
+    <!-- Deep Dive -->
+    <button class="icon-btn icon-btn-sm" data-action="deep-dive" title="Deep Dive  D">
+      <img src="${icons.backPlay}" alt="Deep Dive">
+    </button>
+
+    <!-- Volume slider -->
+    <div class="vol-wrap">
+      <button class="icon-btn icon-btn-sm" id="btn-vol" title="Volume">
+        <img src="${icons.volume}" alt="Volume">
+      </button>
+      <div id="vol-picker" class="hidden">
+        <div id="vol-label">80%</div>
+        <input type="range" id="vol-slider" min="0" max="100" value="80" step="5">
+      </div>
+    </div>
+
+    <!-- Subtitle icon → language picker -->
+    <div class="lang-wrap">
+      <button class="icon-btn icon-btn-sm" id="btn-lang" title="Select subtitle language">
+        <img src="${icons.subtitle}" alt="Language">
+      </button>
+      <div id="lang-picker" class="hidden">
+        <button class="lang-opt" data-lang="en" data-cls="">English</button>
+        <button class="lang-opt" data-lang="hi" data-cls="devanagari">Hindi</button>
+        <button class="lang-opt" data-lang="kn" data-cls="kannada">Kannada</button>
+        <button class="lang-opt" data-lang="te" data-cls="telugu">Telugu</button>
+      </div>
+    </div>
+
+    <!-- Ask Q&A — ? mark right beside subtitle icon -->
+    <button class="ctrl-ask" data-action="ask" title="Ask Q&amp;A  Q">?</button>
+
+    <div class="ctrl-sep"></div>
+
+    <!-- Next File rectangle button -->
+    <button id="btn-next-file" data-action="skip-file" title="Skip to next file  F">
+      <span class="next-tri"></span>
+      Next File
+    </button>
+
+    <!-- Stop -->
+    <button class="ctrl-stop" data-action="stop" title="Stop  Esc">&#x23F9;</button>
+
+  </div>
 </div>
 
 <script>
@@ -585,7 +663,6 @@ function renderNode(node, container) {
   if (node.status === 'active') activeChapterNum = myChapter;
 
   var wrapper = document.createElement('div');
-
   var row = document.createElement('div');
   row.className = 'node-row ' + node.status;
   row.setAttribute('data-file', node.id);
@@ -620,18 +697,13 @@ function renderNode(node, container) {
     }
     wrapper.appendChild(childDiv);
   }
-
   container.appendChild(wrapper);
 }
 
 function render(tree) {
-  chapterCounter   = 0;
-  seenIds          = new Set();
-  activeChapterNum = 0;
-
+  chapterCounter = 0; seenIds = new Set(); activeChapterNum = 0;
   document.getElementById('tree').innerHTML = '';
   renderNode(tree, document.getElementById('tree'));
-
   var total = chapterCounter;
   document.getElementById('stats').textContent = activeChapterNum > 0
     ? 'Chapter ' + activeChapterNum + ' of ' + total
@@ -640,26 +712,33 @@ function render(tree) {
 
 // ── Progress bar ──────────────────────────────────────────────────────────────
 
-function setProgress(pct) {
-  document.getElementById('progress-fill').style.width = pct + '%';
+var progressFill = null;  // cached after first access
+function $fill() { return progressFill || (progressFill = document.getElementById('progress-fill')); }
+
+function setProgress(pct, intervalMs) {
+  var el = $fill();
+  if (intervalMs && intervalMs > 0) {
+    // Sync transition duration to the actual per-word step — bar flows in lock-step
+    el.style.transition = 'width ' + (intervalMs / 1000).toFixed(3) + 's linear';
+  }
+  el.style.width = pct + '%';
 }
 
 // ── Subtitle ──────────────────────────────────────────────────────────────────
 
-var CHUNK = 10;  // words visible at once
+var CHUNK = 10;
 
 function $sub()     { return document.getElementById('subtitle-section'); }
-function $words()   { return document.getElementById('subtitle-words');   }
+function $words()   { return document.getElementById('subtitle-words'); }
 function $loading() { return document.getElementById('subtitle-loading-msg'); }
 
-function updateSubtitle(words, activeIndex) {
+function updateSubtitle(words, activeIndex, intervalMs) {
   $sub().classList.remove('hidden');
   $loading().className = '';
   var el = $words();
   el.style.display = '';
   el.innerHTML = '';
 
-  // activeIndex < 0 → caption mode (plain text, no animation state)
   if (activeIndex < 0) {
     el.textContent = words.join(' ');
     el.style.opacity = '0.72';
@@ -668,7 +747,6 @@ function updateSubtitle(words, activeIndex) {
   }
   el.style.opacity = '1';
 
-  // Sliding 10-word window — snaps forward as activeIndex crosses chunk boundaries
   var chunkStart = Math.floor(activeIndex / CHUNK) * CHUNK;
   var chunkEnd   = Math.min(chunkStart + CHUNK, words.length);
   var localIdx   = activeIndex - chunkStart;
@@ -682,9 +760,9 @@ function updateSubtitle(words, activeIndex) {
     el.appendChild(span);
   }
 
-  // Advance progress bar — transitions at 0.45s linear, so it flows continuously
+  // Advance red progress bar — transition matches the real per-word interval
   var pct = words.length > 1 ? (activeIndex / (words.length - 1)) * 100 : 100;
-  setProgress(pct);
+  setProgress(pct, intervalMs);
 }
 
 function showSubtitleLoading() {
@@ -693,29 +771,76 @@ function showSubtitleLoading() {
   var el = $loading();
   el.textContent = 'preparing\u2026';
   el.className = 'pulsing';
-  setProgress(0);
+  setProgress(0, 0);
 }
 
 function hideSubtitle() {
   $sub().classList.add('hidden');
-  setProgress(0);
+  setProgress(0, 0);
 }
 
-function updateLangTag(code, label) {
-  document.getElementById('lang-tag').textContent = label || code || 'EN';
-}
+// ── Volume picker ─────────────────────────────────────────────────────────────
 
-document.getElementById('lang-tag').addEventListener('click', function() {
-  vscode.postMessage({ type: 'toggle-language' });
+document.getElementById('btn-vol').addEventListener('click', function(e) {
+  e.stopPropagation();
+  document.getElementById('lang-picker').classList.add('hidden');  // close other popups
+  document.getElementById('vol-picker').classList.toggle('hidden');
 });
 
-// ── Pause icon swap ──────────────────────────────────────────────────────────
+document.getElementById('vol-picker').addEventListener('click', function(e) {
+  e.stopPropagation();  // don't close on internal clicks
+});
+
+document.getElementById('vol-slider').addEventListener('input', function() {
+  var level = parseInt(this.value, 10);
+  document.getElementById('vol-label').textContent = level + '%';
+  vscode.postMessage({ type: 'control', action: 'vol-' + level });
+});
+
+// ── Language picker ───────────────────────────────────────────────────────────
+
+var currentLangCls = '';  // current subtitle-words class
+
+function applyLang(code, cls) {
+  currentLangCls = cls;
+  $words().className = cls;
+  // Mark active in picker
+  document.querySelectorAll('.lang-opt').forEach(function(b) {
+    b.classList.toggle('active', b.getAttribute('data-lang') === code);
+  });
+}
+
+// Toggle picker open/close on subtitle icon click
+document.getElementById('btn-lang').addEventListener('click', function(e) {
+  e.stopPropagation();
+  document.getElementById('lang-picker').classList.toggle('hidden');
+});
+
+// Select a language
+document.getElementById('lang-picker').addEventListener('click', function(e) {
+  e.stopPropagation();
+  var btn = e.target.closest('.lang-opt');
+  if (!btn) return;
+  var code = btn.getAttribute('data-lang');
+  var cls  = btn.getAttribute('data-cls');
+  applyLang(code, cls);
+  document.getElementById('lang-picker').classList.add('hidden');
+  vscode.postMessage({ type: 'control', action: 'lang-' + code });
+});
+
+// Close all popups when clicking anywhere else
+document.addEventListener('click', function() {
+  document.getElementById('lang-picker').classList.add('hidden');
+  document.getElementById('vol-picker').classList.add('hidden');
+});
+
+// ── Pause icon swap ───────────────────────────────────────────────────────────
 
 function applyPausedState(paused) {
   document.getElementById('pause-icon').src = paused ? ICONS.play : ICONS.pause;
 }
 
-// ── Controls — single delegated listener ─────────────────────────────────────
+// ── Controls — delegated click handler ────────────────────────────────────────
 
 document.getElementById('controls-bar').addEventListener('click', function(e) {
   var btn = e.target.closest('[data-action]');
@@ -727,14 +852,16 @@ document.getElementById('controls-bar').addEventListener('click', function(e) {
 
 window.addEventListener('message', function(event) {
   var msg = event.data;
-  if      (msg.type === 'update')            render(msg.tree);
-  else if (msg.type === 'subtitle')          updateSubtitle(msg.words, msg.activeIndex);
-  else if (msg.type === 'subtitle-loading')  showSubtitleLoading();
-  else if (msg.type === 'subtitle-hide')     hideSubtitle();
-  else if (msg.type === 'subtitle-language') updateLangTag(msg.code, msg.label);
-  else if (msg.type === 'set-paused')        applyPausedState(msg.paused);
+  if      (msg.type === 'update')           render(msg.tree);
+  else if (msg.type === 'subtitle')         updateSubtitle(msg.words, msg.activeIndex, msg.intervalMs);
+  else if (msg.type === 'subtitle-loading') showSubtitleLoading();
+  else if (msg.type === 'subtitle-hide')    hideSubtitle();
+  else if (msg.type === 'subtitle-language') applyLang(msg.code, msg.label || '');
+  else if (msg.type === 'set-paused')       applyPausedState(msg.paused);
 });
 
+// Init — mark English as selected by default
+applyLang('en', '');
 render(INITIAL_TREE);
 </script>
 </body>

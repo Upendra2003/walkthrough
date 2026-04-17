@@ -1,0 +1,23 @@
+{
+  "src\\audioPlayer.ts": 1776401880.7963262,
+  "src\\codebaseIndexer.ts": 1776284409.2560005,
+  "src\\config.ts": 1776263324.7332585,
+  "src\\embedder.ts": 1776262551.4731195,
+  "src\\extension.ts": 1776401947.7462585,
+  "src\\graph.ts": 1776233971.9472442,
+  "src\\graphPanel.ts": 1776402018.4337368,
+  "src\\narrate.ts": 1776263407.3784268,
+  "src\\onboarding.ts": 1776263361.8428075,
+  "src\\parser.ts": 1776230156.601643,
+  "src\\session.ts": 1776401926.4889088,
+  "CLAUDE.md": 1776368228.9741428,
+  "README.md": 1776399904.2994487,
+  "assets\\play-button.png": 1776262552.5397704,
+  "assets\\Video-BackPlayButton.png": 1776399853.9747515,
+  "assets\\Video-LeftSkip.png": 1776399271.899529,
+  "assets\\Video-PauseButton.png": 1776369095.6180515,
+  "assets\\Video-PlayButton.png": 1776369111.2555082,
+  "assets\\Video-RightSkip.png": 1776399287.6770246,
+  "assets\\Video-Subtitle.png": 1776399306.1128066,
+  "assets\\Video-Volume.png": 1776399321.075274
+}

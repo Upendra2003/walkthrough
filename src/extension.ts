@@ -11,6 +11,7 @@ import {
 import { OnboardingPanel } from "./onboarding";
 import { setActiveConfig, callLLM } from "./narrate";
 import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
+import { AudioPlayer } from "./audioPlayer";
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -96,8 +97,8 @@ function makeCallbacks(): SessionCallbacks {
       }
       // Non-loading plain text falls through to showSubtitleWords for word animation
     },
-    showSubtitleWords: (words, activeIndex) => {
-      activeGraphPanel?.postMessage({ type: "subtitle", words, activeIndex });
+    showSubtitleWords: (words, activeIndex, wordIntervalMs) => {
+      activeGraphPanel?.postMessage({ type: "subtitle", words, activeIndex, intervalMs: wordIntervalMs });
     },
     hideSubtitle: () => {
       activeGraphPanel?.postMessage({ type: "subtitle-hide" });
@@ -208,11 +209,21 @@ async function runMultiFileWalkthrough(
   });
 
   activeGraphPanel.onControl((action) => {
+    // Volume slider — update AudioPlayer level; takes effect on next block play
+    if (action.startsWith("vol-")) {
+      const level = parseInt(action.slice(4), 10);
+      if (!isNaN(level)) AudioPlayer.volume = Math.max(0, Math.min(100, level));
+      return;
+    }
+    // Language selection — log for now; future TTS routing hooks in here
+    if (action.startsWith("lang-")) {
+      log(`[lang] Subtitle language changed to: ${action.slice(5)}`);
+      return;
+    }
     switch (action) {
       case "prev":      activeSession?.prev();         break;
       case "pause":     activeSession?.togglePause();  break;
       case "next":      activeSession?.next();         break;
-      case "skip":      activeSession?.skipLine();     break;
       case "deep-dive": activeSession?.deepDive();     break;
       case "skip-file": activeSession?.skipFile();     break;
       case "ask":       activeSession?.askQuestion();  break;

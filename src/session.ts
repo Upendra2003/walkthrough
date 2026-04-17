@@ -13,16 +13,23 @@ export interface SessionCallbacks {
   setPaused?:   (paused: boolean) => void;
   /** Render a subtitle line (loading=true → pulsing state, no words). */
   showSubtitle?: (text: string, loading?: boolean) => void;
-  /** Word-by-word subtitle animation — sends full word array + active index. */
-  showSubtitleWords?: (words: string[], activeIndex: number) => void;
+  /**
+   * Word-by-word subtitle animation.
+   * `wordIntervalMs` — the per-word step used for this narration so the
+   * progress bar transition in the webview can match exactly.
+   */
+  showSubtitleWords?: (words: string[], activeIndex: number, wordIntervalMs: number) => void;
   /** Clear the subtitle. */
   hideSubtitle?: () => void;
 }
 
 // ── Subtitle animation constants ──────────────────────────────────────────────
 
-/** Milliseconds between each word appearing (~133 wpm, matches Sarvam TTS pace). */
-const SUBTITLE_WORD_MS = 450;
+/**
+ * Fallback word interval when we cannot derive duration from the audio buffer
+ * (Q&A path, deep-dive chunks, error cases).
+ */
+const SUBTITLE_WORD_MS_FALLBACK = 420;
 
 // ---------------------------------------------------------------------------
 // WalkthroughSession
@@ -67,7 +74,7 @@ export class WalkthroughSession {
   private readonly clearStatus:   () => void;
   private readonly setPaused?:          (paused: boolean) => void;
   private readonly showSubtitle?:       (text: string, loading?: boolean) => void;
-  private readonly showSubtitleWords?:  (words: string[], activeIndex: number) => void;
+  private readonly showSubtitleWords?:  (words: string[], activeIndex: number, wordIntervalMs: number) => void;
   private readonly hideSubtitle?:       () => void;
 
   constructor(
@@ -431,16 +438,45 @@ export class WalkthroughSession {
   // ── Subtitle animation ────────────────────────────────────────────────────
 
   /**
+   * Derive per-word interval from a WAV audio buffer.
+   *
+   * Reads `byteRate` (offset 28) and `dataChunkSize` (offset 40) from the
+   * standard PCM-WAV header to get the exact audio duration, then divides by
+   * word count.  Falls back to `SUBTITLE_WORD_MS_FALLBACK` on any error.
+   *
+   * Clamped to [80, 900] ms to avoid runaway values from malformed headers.
+   */
+  private estimateWordIntervalMs(audio: Buffer, wordCount: number): number {
+    if (wordCount === 0) return SUBTITLE_WORD_MS_FALLBACK;
+    try {
+      if (audio.length < 44) throw new Error("too short");
+      const byteRate = audio.readUInt32LE(28);   // bytes per second
+      const dataSize = audio.readUInt32LE(40);   // PCM data bytes
+      if (byteRate === 0) throw new Error("byteRate=0");
+      const durationMs = (dataSize / byteRate) * 1000;
+      return Math.min(900, Math.max(80, durationMs / wordCount));
+    } catch {
+      return SUBTITLE_WORD_MS_FALLBACK;
+    }
+  }
+
+  /**
    * Kick off a word-by-word subtitle animation.
    *
-   * @param text      Full narration text for this block.
-   * @param fromIndex Word index to start from (0 on first play, saved index on resume).
+   * @param text           Full narration text for this block.
+   * @param fromIndex      Word to start from (0 on first play, saved index on resume).
+   * @param wordIntervalMs Per-word step in ms — derived from audio duration so the
+   *                       subtitle advances in perfect lock-step with the TTS voice.
    *
    * The closure captures `activeIndex` so that cancelSubtitleAnimation() can
    * return it, letting the pause handler snapshot exactly which word was last
    * shown before the audio was killed.
    */
-  private startSubtitleAnimation(text: string, fromIndex = 0): void {
+  private startSubtitleAnimation(
+    text: string,
+    fromIndex = 0,
+    wordIntervalMs = SUBTITLE_WORD_MS_FALLBACK
+  ): void {
     this.cancelSubtitleAnimation();
 
     const words = text.trim().split(/\s+/).filter(Boolean);
@@ -453,19 +489,18 @@ export class WalkthroughSession {
       if (stopped || this.stopped) return;
 
       if (this.showSubtitleWords) {
-        this.showSubtitleWords(words, activeIndex);
+        this.showSubtitleWords(words, activeIndex, wordIntervalMs);
       } else {
         this.showSubtitle?.(words.slice(0, activeIndex + 1).join(" "));
       }
 
       if (activeIndex < words.length - 1) {
         activeIndex++;
-        setTimeout(advance, SUBTITLE_WORD_MS);
+        setTimeout(advance, wordIntervalMs);
       }
     };
 
     advance();
-    // Return the current activeIndex so callers can snapshot it on pause.
     this.subtitleStopFn = () => { stopped = true; return activeIndex; };
   }
 
@@ -499,6 +534,11 @@ export class WalkthroughSession {
     // Reset resume position for each new audio clip (new block or deep-dive chunk).
     this.subtitleResumeIndex = 0;
 
+    // Derive per-word interval from the actual WAV duration so the subtitle
+    // advances in perfect lock-step with the TTS voice — no guessing.
+    const words           = subtitleText.trim().split(/\s+/).filter(Boolean);
+    const wordIntervalMs  = this.estimateWordIntervalMs(audio, words.length);
+
     for (;;) {
       await this.waitForResume();
       if (this.stopped)         return "next";
@@ -512,7 +552,7 @@ export class WalkthroughSession {
       // Start (or resume) subtitle from the saved word position.
       // First play: subtitleResumeIndex = 0.
       // After pause/resume: subtitleResumeIndex = word where audio was paused.
-      this.startSubtitleAnimation(subtitleText, this.subtitleResumeIndex);
+      this.startSubtitleAnimation(subtitleText, this.subtitleResumeIndex, wordIntervalMs);
 
       const player = new AudioPlayer();
       this.currentPlayer = player;

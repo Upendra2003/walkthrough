@@ -12,6 +12,7 @@ const config_1 = require("./config");
 const onboarding_1 = require("./onboarding");
 const narrate_1 = require("./narrate");
 const codebaseIndexer_1 = require("./codebaseIndexer");
+const audioPlayer_1 = require("./audioPlayer");
 // ---------------------------------------------------------------------------
 // Module-level state
 // ---------------------------------------------------------------------------
@@ -81,8 +82,8 @@ function makeCallbacks() {
             }
             // Non-loading plain text falls through to showSubtitleWords for word animation
         },
-        showSubtitleWords: (words, activeIndex) => {
-            activeGraphPanel?.postMessage({ type: "subtitle", words, activeIndex });
+        showSubtitleWords: (words, activeIndex, wordIntervalMs) => {
+            activeGraphPanel?.postMessage({ type: "subtitle", words, activeIndex, intervalMs: wordIntervalMs });
         },
         hideSubtitle: () => {
             activeGraphPanel?.postMessage({ type: "subtitle-hide" });
@@ -175,6 +176,18 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
         }
     });
     activeGraphPanel.onControl((action) => {
+        // Volume slider — update AudioPlayer level; takes effect on next block play
+        if (action.startsWith("vol-")) {
+            const level = parseInt(action.slice(4), 10);
+            if (!isNaN(level))
+                audioPlayer_1.AudioPlayer.volume = Math.max(0, Math.min(100, level));
+            return;
+        }
+        // Language selection — log for now; future TTS routing hooks in here
+        if (action.startsWith("lang-")) {
+            log(`[lang] Subtitle language changed to: ${action.slice(5)}`);
+            return;
+        }
         switch (action) {
             case "prev":
                 activeSession?.prev();
@@ -184,9 +197,6 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
                 break;
             case "next":
                 activeSession?.next();
-                break;
-            case "skip":
-                activeSession?.skipLine();
                 break;
             case "deep-dive":
                 activeSession?.deepDive();
