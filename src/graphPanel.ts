@@ -1,23 +1,26 @@
 /**
- * GraphPanel — WebviewPanel: import graph (top) + subtitle zone + video controls (bottom).
+ * GraphPanel — unified right-panel WebviewPanel.
  *
- * Layout (flex column, 100vh):
- *   ▸ #graph-section   — scrollable file tree            (flex: 1)
- *   ▸ #subtitle-section — capped subtitle zone           (flex-shrink: 0, max-height: 130px)
- *   ▸ #controls-bar     — video-player control row       (flex-shrink: 0, ~44px)
+ * Three zones stacked in a flex column:
+ *   1. #graph-section   — scrollable file tree          (flex: 1)
+ *   2. #subtitle-section — fixed-height subtitle zone   (88px)
+ *   3. #progress-track  — animated read-line            (3px, amber glow)
+ *   4. #controls-bar    — video-player controls         (~52px)
  *
- * Extension → webview messages:
- *   { type: 'update', tree }
- *   { type: 'subtitle', words, activeIndex }
- *   { type: 'subtitle-loading' }
- *   { type: 'subtitle-hide' }
- *   { type: 'subtitle-language', code, label }
- *   { type: 'set-paused', paused }          ← flips ⏸/▶ button icon
+ * Font: Source Sans 3 (Google Fonts)
  *
- * Webview → extension messages:
- *   { type: 'navigate', file }
- *   { type: 'control',  action }            ← prev|pause|next|skip|deep-dive|skip-file|ask|stop
- *   { type: 'toggle-language' }
+ * Extension → webview:
+ *   { type:'update', tree }
+ *   { type:'subtitle', words, activeIndex }   ← also drives the progress bar
+ *   { type:'subtitle-loading' }
+ *   { type:'subtitle-hide' }
+ *   { type:'subtitle-language', code, label }
+ *   { type:'set-paused', paused }             ← swaps play/pause icon
+ *
+ * Webview → extension:
+ *   { type:'navigate', file }
+ *   { type:'control',  action }   prev|pause|next|skip|deep-dive|skip-file|ask|stop
+ *   { type:'toggle-language' }
  */
 
 import * as vscode from "vscode";
@@ -59,6 +62,12 @@ const PYTHON_SVG =
   '3.02307 6.76103 2.88881 6.76108 2.63086C6.76108 2.43311 6.75106 2.39389 6.6683 2.27539Z"/>' +
   '</svg>';
 
+interface IconSet {
+  play: string; pause: string;
+  leftSkip: string; rightSkip: string;
+  backPlay: string; subtitle: string; volume: string;
+}
+
 export class GraphPanel {
   private readonly panel: vscode.WebviewPanel;
   private clickCallback:   ((file: string) => void) | null = null;
@@ -66,16 +75,36 @@ export class GraphPanel {
   private disposed = false;
 
   constructor(context: vscode.ExtensionContext, graph: ImportGraph) {
+    const assetsUri = vscode.Uri.joinPath(context.extensionUri, "assets");
+
     this.panel = vscode.window.createWebviewPanel(
       "walkthroughGraph",
       "Walkthrough — Codebase Map",
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { enableScripts: true, retainContextWhenHidden: true }
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [assetsUri],
+      }
     );
 
-    this.panel.webview.html = buildHtml(graph.root);
+    const w = this.panel.webview;
+    const uri = (file: string) =>
+      w.asWebviewUri(vscode.Uri.joinPath(assetsUri, file)).toString();
 
-    this.panel.webview.onDidReceiveMessage(
+    const icons: IconSet = {
+      play:      uri("Video-PlayButton.png"),
+      pause:     uri("Video-PauseButton.png"),
+      leftSkip:  uri("Video-LeftSkip.png"),
+      rightSkip: uri("Video-RightSkip.png"),
+      backPlay:  uri("Video-BackPlayButton.png"),
+      subtitle:  uri("Video-Subtitle.png"),
+      volume:    uri("Video-Volume.png"),
+    };
+
+    w.html = buildHtml(graph.root, w.cspSource, icons);
+
+    w.onDidReceiveMessage(
       (msg: { type: string; file?: string; action?: string }) => {
         if (msg.type === "navigate" && msg.file && this.clickCallback) {
           this.clickCallback(msg.file);
@@ -88,7 +117,11 @@ export class GraphPanel {
       context.subscriptions
     );
 
-    this.panel.onDidDispose(() => { this.disposed = true; }, undefined, context.subscriptions);
+    this.panel.onDidDispose(
+      () => { this.disposed = true; },
+      undefined,
+      context.subscriptions
+    );
   }
 
   update(root: FileNode): void {
@@ -96,20 +129,16 @@ export class GraphPanel {
     this.panel.webview.postMessage({ type: "update", tree: serializeNode(root) });
   }
 
-  /** Send any message to the webview (subtitle, subtitle-loading, etc.). */
   postMessage(msg: object): void {
     if (!this.disposed) this.panel.webview.postMessage(msg);
   }
 
-  /** Update the pause/play icon on the in-panel control button. */
   setPaused(paused: boolean): void {
     if (!this.disposed) this.panel.webview.postMessage({ type: "set-paused", paused });
   }
 
   onNodeClick(cb: (file: string) => void): void { this.clickCallback = cb; }
-
-  /** Register a handler for in-panel button presses. */
-  onControl(cb: (action: string) => void): void { this.controlCallback = cb; }
+  onControl(cb: (action: string) => void): void  { this.controlCallback = cb; }
 
   reveal(): void {
     if (!this.disposed) this.panel.reveal(vscode.ViewColumn.Beside, true);
@@ -123,7 +152,8 @@ export class GraphPanel {
 // ── Serialise ──────────────────────────────────────────────────────────────────
 
 interface SerialNode {
-  id: string; relativePath: string; language: string; status: string; children: SerialNode[];
+  id: string; relativePath: string; language: string;
+  status: string; children: SerialNode[];
 }
 
 function serializeNode(n: FileNode): SerialNode {
@@ -135,31 +165,30 @@ function serializeNode(n: FileNode): SerialNode {
 
 // ── HTML ───────────────────────────────────────────────────────────────────────
 
-function buildHtml(root: FileNode): string {
+function buildHtml(root: FileNode, cspSource: string, icons: IconSet): string {
   const initialJson = JSON.stringify(serializeNode(root)).replace(/</g, "\\u003c");
   const pythonSvgJs = JSON.stringify(PYTHON_SVG);
+  const iconsJs     = JSON.stringify(icons);   // embedded so JS can swap pause/play src
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline';">
+      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline'; img-src ${cspSource};">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@400;500&display=swap');
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
-html, body {
-  height: 100%;
-  overflow: hidden;
-}
+html, body { height: 100%; overflow: hidden; }
 
 body {
   background: var(--vscode-editor-background, #1e1e2e);
   color: var(--vscode-foreground, #cdd6f4);
-  font-family: var(--vscode-font-family, 'Segoe UI', monospace);
+  font-family: 'Source Sans 3', var(--vscode-font-family, 'Segoe UI'), system-ui, sans-serif;
   font-size: 13px;
   display: flex;
   flex-direction: column;
@@ -167,11 +196,11 @@ body {
   user-select: none;
 }
 
-/* ════ Graph section ════ */
+/* ════════════════════════════ Graph section ════════════════════════════ */
 #graph-section {
   flex: 1;
   overflow-y: auto;
-  padding: 16px 12px;
+  padding: 16px 12px 12px;
   min-height: 0;
 }
 
@@ -179,15 +208,15 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
-  margin-bottom: 14px;
+  margin-bottom: 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid rgba(255,255,255,0.07);
 }
 #header h2 {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 1.2px;
   color: var(--vscode-textLink-foreground, #89b4fa);
   flex: 1;
 }
@@ -198,41 +227,38 @@ body {
   letter-spacing: 0.02em;
 }
 
+/* ── File rows ── */
 .node-row {
   display: flex;
   align-items: center;
-  gap: 7px;
-  padding: 5px 8px;
+  gap: 6px;
+  padding: 4px 8px;
   border-radius: 4px;
   margin: 1px 0;
   cursor: pointer;
-  border-left: 3px solid transparent;
+  border-left: 2px solid transparent;
   transition: background 0.12s;
 }
 .node-row:hover    { background: var(--vscode-list-hoverBackground, rgba(255,255,255,0.05)); }
-.node-row.active   { background: rgba(249,226,175,0.10); border-left-color: #f9e2af; }
+.node-row.active   { background: rgba(249,226,175,0.09); border-left-color: #f9e2af; }
 .node-row.completed{ background: rgba(166,227,161,0.07); border-left-color: #a6e3a1; }
-.node-row.skipped  { opacity: 0.45; }
+.node-row.skipped  { opacity: 0.38; }
 
 .chapter-num {
-  font-size: 10px;
-  color: rgba(255,255,255,0.2);
+  font-size: 9.5px;
+  color: rgba(255,255,255,0.18);
   font-variant-numeric: tabular-nums;
   flex-shrink: 0;
-  min-width: 20px;
-  letter-spacing: 0.02em;
+  min-width: 18px;
+  letter-spacing: 0.03em;
+  font-weight: 500;
 }
-.node-row.active    .chapter-num { color: rgba(249,226,175,0.5); }
-.node-row.completed .chapter-num { color: rgba(166,227,161,0.4); }
+.node-row.active    .chapter-num { color: rgba(249,226,175,0.45); }
+.node-row.completed .chapter-num { color: rgba(166,227,161,0.38); }
 
 .icon {
-  width: 18px;
-  text-align: center;
-  font-size: 12px;
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 16px; text-align: center; font-size: 11px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
   color: var(--vscode-descriptionForeground, #6c7086);
 }
 .node-row.active    .icon { color: #f9e2af; }
@@ -244,48 +270,49 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   font-size: 12.5px;
+  font-weight: 400;
 }
 .node-row.active    .filename { color: #f9e2af; font-weight: 600; }
 .node-row.completed .filename { color: #a6e3a1; }
 .node-row.skipped   .filename { text-decoration: line-through; color: #6c7086; }
 
 .children {
-  margin-left: 28px;
-  border-left: 1px solid rgba(255,255,255,0.06);
+  margin-left: 24px;
+  border-left: 1px solid rgba(255,255,255,0.05);
   padding-left: 4px;
 }
 
 #legend {
-  margin-top: 18px;
-  padding-top: 10px;
-  border-top: 1px solid rgba(255,255,255,0.06);
-  font-size: 10.5px;
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(255,255,255,0.05);
+  font-size: 10px;
   color: var(--vscode-descriptionForeground, #6c7086);
   display: flex;
   flex-wrap: wrap;
   gap: 10px;
+  font-weight: 400;
 }
 .legend-item { display: flex; align-items: center; gap: 4px; }
-.dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .dot-active  { background: #f9e2af; }
 .dot-done    { background: #a6e3a1; }
 .dot-skipped { background: #6c7086; }
-.dot-pending { background: #45475a; }
+.dot-pending { background: #3b3d52; }
 
-/* ════ Subtitle section ════ */
+/* ════════════════════════════ Subtitle section ════════════════════════════ */
 #subtitle-section {
   flex-shrink: 0;
-  border-top: 0.5px solid rgba(255,255,255,0.08);
-  background: linear-gradient(to bottom, transparent, rgba(0,0,0,0.82));
+  height: 88px;
+  overflow: hidden;
+  border-top: 0.5px solid rgba(255,255,255,0.07);
+  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.78) 100%);
   position: relative;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 16px 20px 12px;
+  padding: 14px 20px 10px;
   transition: opacity 0.25s ease;
-  /* Fixed height: always exactly one "chunk" tall — no overflow, no clamp */
-  height: 88px;
-  overflow: hidden;
 }
 #subtitle-section.hidden {
   opacity: 0;
@@ -297,144 +324,177 @@ body {
 
 #lang-tag {
   position: absolute;
-  top: 6px;
-  right: 10px;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: 0.1em;
-  color: rgba(255,255,255,0.28);
+  top: 6px; right: 10px;
+  font-size: 9px; font-weight: 700; letter-spacing: 0.12em;
+  color: rgba(255,255,255,0.25);
   cursor: pointer;
   padding: 2px 5px;
   border-radius: 3px;
-  border: 1px solid rgba(255,255,255,0.10);
+  border: 1px solid rgba(255,255,255,0.09);
   transition: color 0.15s, border-color 0.15s;
-  user-select: none;
+  font-family: 'Source Sans 3', sans-serif;
 }
-#lang-tag:hover { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.25); }
+#lang-tag:hover { color: rgba(255,255,255,0.6); border-color: rgba(255,255,255,0.22); }
 
-#subtitle-inner {
-  width: 100%;
-  text-align: center;
-  overflow: hidden;
-}
+#subtitle-inner { width: 100%; text-align: center; overflow: hidden; }
 
 #subtitle-words {
-  font-family: 'Segoe UI', system-ui, sans-serif;
+  font-family: 'Source Sans 3', system-ui, sans-serif;
   font-size: 15px;
+  font-weight: 400;
   line-height: 1.55;
   color: white;
-  /* words wrap naturally; the parent's fixed height clips excess */
   word-break: break-word;
   overflow-wrap: break-word;
 }
-#subtitle-words.devanagari { font-family: 'Noto Sans Devanagari', 'Segoe UI', sans-serif; }
-#subtitle-words.tamil      { font-family: 'Noto Sans Tamil',       'Segoe UI', sans-serif; }
+#subtitle-words.devanagari { font-family: 'Noto Sans Devanagari', 'Source Sans 3', sans-serif; }
+#subtitle-words.tamil      { font-family: 'Noto Sans Tamil',       'Source Sans 3', sans-serif; }
 
 .word { display: inline; transition: opacity 0.12s ease; }
-.word.done    { opacity: 0.38; color: white; }
-.word.active  { opacity: 1.0;  color: white; filter: brightness(1.18); }
-.word.pending { opacity: 0.18; color: white; }
+.word.done    { opacity: 0.35; color: white; }
+.word.active  { opacity: 1.0;  color: white; filter: brightness(1.15); font-weight: 600; }
+.word.pending { opacity: 0.16; color: white; }
 
 #subtitle-loading-msg {
-  font-family: 'Segoe UI', system-ui, sans-serif;
-  font-size: 12px;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12px; font-weight: 300;
   color: rgba(255,255,255,0.28);
   font-style: italic;
   display: none;
 }
 @keyframes subtitlePulse {
   0%, 100% { opacity: 0.15; }
-  50%       { opacity: 0.5;  }
+  50%       { opacity: 0.5; }
 }
 #subtitle-loading-msg.pulsing {
   display: block;
   animation: subtitlePulse 1.6s ease infinite;
 }
 
-/* ════ Video-player controls bar ════ */
+/* ════════════════════════════ Progress / read-line ════════════════════════════ */
+#progress-track {
+  flex-shrink: 0;
+  height: 3px;
+  background: rgba(255,255,255,0.05);
+  position: relative;
+  overflow: visible;
+}
+#progress-fill {
+  position: absolute;
+  top: 0; left: 0;
+  height: 100%;
+  width: 0%;
+  /* Amber-to-warm-white gradient — feels like a warm spotlight sweeping the bar */
+  background: linear-gradient(90deg, #c97f1a 0%, #f9e2af 85%, #fff8e7 100%);
+  border-radius: 0 2px 2px 0;
+  /* transition matches SUBTITLE_WORD_MS (450ms) → the bar flows continuously */
+  transition: width 0.45s linear;
+  /* Glow: two layered shadows so it bleeds above and below the 3px rail */
+  box-shadow:
+    0 0 6px 1px rgba(249,226,175,0.55),
+    0 0 14px 2px rgba(249,200,100,0.22);
+}
+/* Bright dot at the leading edge */
+#progress-fill::after {
+  content: '';
+  position: absolute;
+  right: -3px; top: 50%;
+  transform: translateY(-50%);
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: #fff8e7;
+  box-shadow: 0 0 6px 2px rgba(249,226,175,0.8);
+}
+
+/* ════════════════════════════ Controls bar ════════════════════════════ */
 #controls-bar {
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  padding: 6px 12px 8px;
-  gap: 8px;
-  background: rgba(0,0,0,0.55);
-  border-top: 0.5px solid rgba(255,255,255,0.07);
+  padding: 6px 14px 8px;
+  background: rgba(0,0,0,0.52);
+  gap: 4px;
 }
 
-/* Primary playback group: ⏮ ⏸ ⏭ */
-.ctrl-primary {
+/* Primary playback — left cluster */
+#ctrl-primary {
   display: flex;
   align-items: center;
   gap: 2px;
 }
 
-.ctrl-btn {
+/* Utility row — right cluster */
+#ctrl-secondary {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-left: auto;
+}
+
+/* Icon button base */
+.icon-btn {
   background: none;
   border: none;
-  color: rgba(255,255,255,0.6);
-  font-size: 17px;
   cursor: pointer;
-  padding: 4px 7px;
-  border-radius: 5px;
-  line-height: 1;
+  padding: 5px 6px;
+  border-radius: 6px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color 0.12s, background 0.12s;
-}
-.ctrl-btn:hover { color: white; background: rgba(255,255,255,0.1); }
-
-#btn-pause {
-  font-size: 20px;
-  padding: 4px 10px;
-  color: rgba(255,255,255,0.85);
-}
-#btn-pause:hover { color: white; background: rgba(255,255,255,0.12); }
-
-/* Thin separator */
-.ctrl-divider {
-  width: 1px;
-  height: 18px;
-  background: rgba(255,255,255,0.1);
+  opacity: 0.6;
+  transition: opacity 0.14s, background 0.14s;
   flex-shrink: 0;
-  margin: 0 2px;
+}
+.icon-btn:hover { opacity: 1; background: rgba(255,255,255,0.09); }
+
+/* Standard icon size */
+.icon-btn img { width: 20px; height: 20px; object-fit: contain; display: block; }
+
+/* Pause/play — slightly larger */
+#btn-pause        { opacity: 0.88; padding: 4px 10px; }
+#btn-pause:hover  { opacity: 1; }
+#btn-pause img    { width: 28px; height: 28px; }
+
+/* Small utility icon buttons */
+.icon-btn-sm img  { width: 17px; height: 17px; }
+
+/* Thin vertical separator */
+.ctrl-sep {
+  width: 1px;
+  height: 16px;
+  background: rgba(255,255,255,0.09);
+  flex-shrink: 0;
+  margin: 0 4px;
 }
 
-/* Secondary utility buttons */
-.ctrl-secondary {
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  flex: 1;
-}
-
-.ctrl-sm {
+/* Text-label utility buttons */
+.ctrl-text {
   background: none;
   border: none;
-  color: rgba(255,255,255,0.35);
-  font-size: 11px;
   cursor: pointer;
+  color: rgba(255,255,255,0.32);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 11px;
+  font-weight: 400;
   padding: 3px 7px;
   border-radius: 4px;
   white-space: nowrap;
-  line-height: 1.2;
   transition: color 0.12s, background 0.12s;
+  line-height: 1.2;
 }
-.ctrl-sm:hover { color: rgba(255,255,255,0.82); background: rgba(255,255,255,0.08); }
+.ctrl-text:hover { color: rgba(255,255,255,0.82); background: rgba(255,255,255,0.08); }
 
-.ctrl-stop-btn {
-  margin-left: auto;
-  color: rgba(220,70,70,0.45);
+.ctrl-stop {
+  color: rgba(220,70,70,0.4);
   font-size: 14px;
-  padding: 3px 6px;
+  padding: 3px 5px;
 }
-.ctrl-stop-btn:hover { color: rgba(220,70,70,0.9); background: rgba(220,70,70,0.12); }
+.ctrl-stop:hover { color: rgba(220,70,70,0.9); background: rgba(220,70,70,0.1); }
 </style>
 </head>
 <body>
 
-<!-- ── Scrollable graph section ── -->
+<!-- ① Scrollable file tree -->
 <div id="graph-section">
   <div id="header">
     <h2>&#x2B21; Codebase Map</h2>
@@ -449,7 +509,7 @@ body {
   </div>
 </div>
 
-<!-- ── Subtitle zone (capped, never overflows) ── -->
+<!-- ② Subtitle zone -->
 <div id="subtitle-section" class="hidden">
   <span id="lang-tag">EN</span>
   <div id="subtitle-inner">
@@ -458,29 +518,52 @@ body {
   </div>
 </div>
 
-<!-- ── Video-player controls ── -->
+<!-- ③ Animated read-line -->
+<div id="progress-track">
+  <div id="progress-fill"></div>
+</div>
+
+<!-- ④ Video-player controls -->
 <div id="controls-bar">
-  <div class="ctrl-primary">
-    <button class="ctrl-btn" data-action="prev"  title="Previous block  \u2190">&#x23EE;</button>
-    <button class="ctrl-btn" id="btn-pause" data-action="pause" title="Pause  Space">&#x23F8;</button>
-    <button class="ctrl-btn" data-action="next"  title="Next block  \u2192">&#x23ED;</button>
+
+  <!-- Primary: ← pause → -->
+  <div id="ctrl-primary">
+    <button class="icon-btn" data-action="prev" title="Previous block  \u2190">
+      <img src="${icons.leftSkip}" alt="Prev">
+    </button>
+    <button class="icon-btn" id="btn-pause" data-action="pause" title="Pause / Resume  Space">
+      <img id="pause-icon" src="${icons.pause}" alt="Pause">
+    </button>
+    <button class="icon-btn" data-action="next" title="Next block  \u2192">
+      <img src="${icons.rightSkip}" alt="Next">
+    </button>
   </div>
-  <div class="ctrl-divider"></div>
-  <div class="ctrl-secondary">
-    <button class="ctrl-sm" data-action="skip"      title="Skip block  S">&#x23E9; Skip</button>
-    <button class="ctrl-sm" data-action="deep-dive" title="Deep Dive  D">&#x25A6; Dive</button>
-    <button class="ctrl-sm" data-action="skip-file" title="Skip File  F">&#x23ED; File</button>
-    <button class="ctrl-sm" data-action="ask"       title="Ask (Q&amp;A)  Q">&#x3F; Ask</button>
-    <button class="ctrl-sm ctrl-stop-btn" data-action="stop" title="Stop  Esc">&#x23F9;</button>
+
+  <!-- Secondary: utility icons + text labels -->
+  <div id="ctrl-secondary">
+    <button class="icon-btn icon-btn-sm" data-action="deep-dive" title="Deep Dive  D">
+      <img src="${icons.volume}" alt="Deep Dive">
+    </button>
+    <button class="icon-btn icon-btn-sm" data-action="ask" title="Ask Q&amp;A  Q">
+      <img src="${icons.subtitle}" alt="Ask">
+    </button>
+    <button class="icon-btn icon-btn-sm" data-action="skip-file" title="Skip File  F">
+      <img src="${icons.backPlay}" alt="Skip File">
+    </button>
+    <div class="ctrl-sep"></div>
+    <button class="ctrl-text" data-action="skip" title="Skip block  S">Skip</button>
+    <button class="ctrl-text ctrl-stop" data-action="stop" title="Stop  Esc">&#x23F9;</button>
   </div>
+
 </div>
 
 <script>
 var vscode       = acquireVsCodeApi();
 var INITIAL_TREE = ${initialJson};
 var PYTHON_SVG   = ${pythonSvgJs};
+var ICONS        = ${iconsJs};
 
-// ── Render state ─────────────────────────────────────────────────────────────
+// ── Render state ──────────────────────────────────────────────────────────────
 var chapterCounter   = 0;
 var seenIds          = new Set();
 var activeChapterNum = 0;
@@ -506,7 +589,7 @@ function renderNode(node, container) {
   var row = document.createElement('div');
   row.className = 'node-row ' + node.status;
   row.setAttribute('data-file', node.id);
-  if (isDuplicate) row.style.opacity = '0.45';
+  if (isDuplicate) row.style.opacity = '0.42';
   row.addEventListener('click', function() {
     vscode.postMessage({ type: 'navigate', file: node.id });
   });
@@ -530,12 +613,12 @@ function renderNode(node, container) {
   wrapper.appendChild(row);
 
   if (node.children && node.children.length > 0) {
-    var childrenDiv = document.createElement('div');
-    childrenDiv.className = 'children';
+    var childDiv = document.createElement('div');
+    childDiv.className = 'children';
     for (var i = 0; i < node.children.length; i++) {
-      renderNode(node.children[i], childrenDiv);
+      renderNode(node.children[i], childDiv);
     }
-    wrapper.appendChild(childrenDiv);
+    wrapper.appendChild(childDiv);
   }
 
   container.appendChild(wrapper);
@@ -546,25 +629,28 @@ function render(tree) {
   seenIds          = new Set();
   activeChapterNum = 0;
 
-  var container = document.getElementById('tree');
-  container.innerHTML = '';
-  renderNode(tree, container);
+  document.getElementById('tree').innerHTML = '';
+  renderNode(tree, document.getElementById('tree'));
 
-  var total   = chapterCounter;
-  var statsEl = document.getElementById('stats');
-  statsEl.textContent = activeChapterNum > 0
+  var total = chapterCounter;
+  document.getElementById('stats').textContent = activeChapterNum > 0
     ? 'Chapter ' + activeChapterNum + ' of ' + total
     : total + (total === 1 ? ' file' : ' files');
 }
 
-// ── Subtitle ─────────────────────────────────────────────────────────────────
+// ── Progress bar ──────────────────────────────────────────────────────────────
+
+function setProgress(pct) {
+  document.getElementById('progress-fill').style.width = pct + '%';
+}
+
+// ── Subtitle ──────────────────────────────────────────────────────────────────
+
+var CHUNK = 10;  // words visible at once
 
 function $sub()     { return document.getElementById('subtitle-section'); }
 function $words()   { return document.getElementById('subtitle-words');   }
 function $loading() { return document.getElementById('subtitle-loading-msg'); }
-
-// Number of words shown at once — enough to fill ~2 lines in the panel.
-var CHUNK = 10;
 
 function updateSubtitle(words, activeIndex) {
   $sub().classList.remove('hidden');
@@ -573,16 +659,16 @@ function updateSubtitle(words, activeIndex) {
   el.style.display = '';
   el.innerHTML = '';
 
-  // activeIndex < 0 means "show all as plain caption" (indexing vibes, etc.)
+  // activeIndex < 0 → caption mode (plain text, no animation state)
   if (activeIndex < 0) {
     el.textContent = words.join(' ');
-    el.style.opacity = '0.75';
+    el.style.opacity = '0.72';
+    setProgress(0);
     return;
   }
   el.style.opacity = '1';
 
-  // Slide the window: always show the CHUNK words whose window contains activeIndex.
-  // The window snaps forward only when activeIndex leaves the current chunk.
+  // Sliding 10-word window — snaps forward as activeIndex crosses chunk boundaries
   var chunkStart = Math.floor(activeIndex / CHUNK) * CHUNK;
   var chunkEnd   = Math.min(chunkStart + CHUNK, words.length);
   var localIdx   = activeIndex - chunkStart;
@@ -595,6 +681,10 @@ function updateSubtitle(words, activeIndex) {
     span.textContent = words[i];
     el.appendChild(span);
   }
+
+  // Advance progress bar — transitions at 0.45s linear, so it flows continuously
+  var pct = words.length > 1 ? (activeIndex / (words.length - 1)) * 100 : 100;
+  setProgress(pct);
 }
 
 function showSubtitleLoading() {
@@ -603,10 +693,12 @@ function showSubtitleLoading() {
   var el = $loading();
   el.textContent = 'preparing\u2026';
   el.className = 'pulsing';
+  setProgress(0);
 }
 
 function hideSubtitle() {
   $sub().classList.add('hidden');
+  setProgress(0);
 }
 
 function updateLangTag(code, label) {
@@ -617,15 +709,13 @@ document.getElementById('lang-tag').addEventListener('click', function() {
   vscode.postMessage({ type: 'toggle-language' });
 });
 
-// ── Pause button state ───────────────────────────────────────────────────────
+// ── Pause icon swap ──────────────────────────────────────────────────────────
 
 function applyPausedState(paused) {
-  var btn = document.getElementById('btn-pause');
-  btn.innerHTML  = paused ? '&#x25B6;' : '&#x23F8;';
-  btn.title      = paused ? 'Resume  Space' : 'Pause  Space';
+  document.getElementById('pause-icon').src = paused ? ICONS.play : ICONS.pause;
 }
 
-// ── Controls — event delegation ──────────────────────────────────────────────
+// ── Controls — single delegated listener ─────────────────────────────────────
 
 document.getElementById('controls-bar').addEventListener('click', function(e) {
   var btn = e.target.closest('[data-action]');
@@ -633,7 +723,7 @@ document.getElementById('controls-bar').addEventListener('click', function(e) {
   vscode.postMessage({ type: 'control', action: btn.getAttribute('data-action') });
 });
 
-// ── Message handler ──────────────────────────────────────────────────────────
+// ── Message handler ───────────────────────────────────────────────────────────
 
 window.addEventListener('message', function(event) {
   var msg = event.data;
