@@ -54,8 +54,7 @@ function buildHtml(prefill) {
         apiKey: prefill.apiKey ?? "",
         sarvamApiKey: prefill.sarvamApiKey ?? "",
         customBaseUrl: prefill.customBaseUrl ?? "",
-        embeddingProvider: prefill.embeddingProvider ?? "jina",
-        embeddingApiKey: prefill.embeddingApiKey ?? "",
+        embeddingProvider: "local",
     });
     return `<!DOCTYPE html>
 <html lang="en">
@@ -300,7 +299,7 @@ body {
   <!-- Step 3: Voice + Semantic Search -->
   <div class="card" id="step-3">
     <h2>Voice &amp; Semantic Search</h2>
-    <p>Two more keys unlock the full experience — voice narration and codebase Q&amp;A.</p>
+    <p>One more key unlocks voice narration. Semantic Q&amp;A runs locally — no API key needed.</p>
 
     <div class="field">
       <label>Sarvam AI — Voice Narration</label>
@@ -313,16 +312,8 @@ body {
       </div>
     </div>
 
-    <div class="field">
-      <label>Jina AI — Semantic Search &amp; Q&amp;A</label>
-      <div class="input-wrap">
-        <input type="password" id="input-jina" placeholder="Paste your Jina AI key (optional)">
-        <span class="show-toggle" onclick="toggleShow('input-jina', this)">Show</span>
-      </div>
-      <div class="hint">
-        Free 1 M tokens at <a href="#" onclick="openLink('https://jina.ai')">jina.ai</a>
-        &nbsp;·&nbsp; Powers the <strong>Ask (Q)</strong> feature — indexes your whole codebase into Qdrant.
-      </div>
+    <div class="hint" style="margin-bottom:20px; padding:10px 14px; background:rgba(166,227,161,0.08); border-radius:6px; border:1px solid rgba(166,227,161,0.2);">
+      Codebase Q&amp;A uses <strong>all-MiniLM-L6-v2</strong> locally via sentence-transformers — no API key required.
     </div>
 
     <div class="actions">
@@ -481,11 +472,9 @@ function testConnection() {
 function saveAndNext() {
   var sarvam = document.getElementById('input-sarvam').value.trim();
   if (!sarvam) { alert('Please enter your Sarvam API key.'); return; }
-  var jina = document.getElementById('input-jina').value.trim();
   var cfg = getStep2Config();
   cfg.sarvamApiKey      = sarvam;
-  cfg.embeddingProvider = 'jina';
-  cfg.embeddingApiKey   = jina;
+  cfg.embeddingProvider = 'local';
   vscode.postMessage({ type: 'save', config: cfg });
 }
 
@@ -534,13 +523,12 @@ window.addEventListener('message', function(e) {
     // Update done list with provider/model info
     var cfg = getStep2Config();
     var sarvam = document.getElementById('input-sarvam').value.trim();
-    var jina   = document.getElementById('input-jina').value.trim();
     var list   = document.getElementById('done-list');
     list.innerHTML =
       '<li>Provider: ' + cfg.provider + '</li>' +
       '<li>Model: ' + cfg.model + '</li>' +
       '<li>Voice narration: Sarvam AI</li>' +
-      (jina ? '<li>Semantic search: Jina AI (Q&A ready)</li>' : '<li style="color:#9399b2">Semantic search: skipped (Add Jina key later via Configure)</li>');
+      (sarvam ? '<li>Semantic search: local all-MiniLM-L6-v2 (Q&A ready)</li>' : '');
   }
 });
 
@@ -549,10 +537,6 @@ window.addEventListener('load', function() {
   if (PREFILL.sarvamApiKey) {
     document.getElementById('input-sarvam').value = PREFILL.sarvamApiKey;
   }
-  if (PREFILL.embeddingApiKey) {
-    document.getElementById('input-jina').value = PREFILL.embeddingApiKey;
-  }
-  // If provider is already set from prefill, make the card active
   selectProvider(provider);
 });
 </script>

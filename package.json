@@ -163,12 +163,11 @@
         },
         "walkthrough.embeddingProvider": {
           "type": "string",
-          "enum": ["jina", "openai"],
+          "enum": ["local"],
           "enumDescriptions": [
-            "Jina AI — jina-embeddings-v2-base-code (768 dims, free tier, code-optimised)",
-            "OpenAI  — text-embedding-3-small (1536 dims, reuses your OpenAI key)"
+            "Local — all-MiniLM-L6-v2 via sentence-transformers (384 dims, no API key needed)"
           ],
-          "default": "jina",
+          "default": "local",
           "description": "Embedding provider for codebase indexing and Q&A semantic search."
         }
       }

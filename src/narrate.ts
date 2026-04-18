@@ -14,9 +14,9 @@ import * as https from "https";
 import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
-import { SemanticBlock }    from "./parser";
+import { SemanticBlock } from "./parser";
 import { WalkthroughConfig } from "./config";
-import { embed }             from "./embedder";
+import { embed } from "./embedder";
 
 // ---------------------------------------------------------------------------
 // .env fallback (developer use only — overridden by SecretStorage in production)
@@ -46,13 +46,12 @@ function getConfig(): WalkthroughConfig {
   if (activeConfig) return activeConfig;
   // Dev fallback: assume Groq with .env keys
   return {
-    provider:          "groq",
-    model:             process.env.GROQ_MODEL ?? "qwen/qwen3-32b",
-    apiKey:            process.env.GROQ_API_KEY ?? "",
-    sarvamApiKey:      process.env.SARVAM_API_KEY ?? "",
-    customBaseUrl:     "",
-    embeddingProvider: "jina",
-    embeddingApiKey:   process.env.JINA_API_KEY ?? process.env.EMBEDDING_API_KEY ?? "",
+    provider: "groq",
+    model: process.env.GROQ_MODEL ?? "qwen/qwen3-32b",
+    apiKey: process.env.GROQ_API_KEY ?? "",
+    sarvamApiKey: process.env.SARVAM_API_KEY ?? "",
+    customBaseUrl: "",
+    embeddingProvider: "local",
   };
 }
 
@@ -347,66 +346,75 @@ function makeQdrantRequest(method: string, urlPath: string, body?: object): Prom
 }
 
 export async function queryCodebase(
-  question: string
+  question: string,
+  onProgress?: (msg: string) => void
 ): Promise<{ answer: string; topLabel: string; topFile: string }> {
   const cfg = getConfig();
 
-  if (!cfg.embeddingApiKey) {
-    throw new Error(
-      "Embedding API key not configured — open Walkthrough: Configure to add your Jina AI or OpenAI key."
-    );
-  }
-
-  // ── 1. Embed the question (same model used to index the codebase) ──────────
+  // ── 1. Embed the question ─────────────────────────────────────────────────
+  onProgress?.("Analysing your question...");
   const vectors = await embed([question], cfg);
   const qVector = vectors[0];
 
   // ── 2. Vector search in Qdrant ────────────────────────────────────────────
+  onProgress?.("Searching the codebase index...");
   const searchRes = await makeQdrantRequest("POST", "/collections/code_blocks/points/search", {
-    vector:          qVector,
-    limit:           5,
-    with_payload:    true,
-    with_vector:     false,
-    score_threshold: 0.25,
+    vector: qVector,
+    limit: 10,
+    with_payload: true,
+    with_vector: false,
+    score_threshold: 0.10,
   }) as { result?: Array<{ score: number; payload: QdrantPoint["payload"] }> };
 
   const hits = searchRes.result ?? [];
+  console.log(`[Q&A] Retrieved ${hits.length} blocks:`,
+    hits.map(h => `${h.score.toFixed(3)} — ${h.payload.label} (${h.payload.file})`).join(", "));
 
   if (hits.length === 0) {
     throw new Error(
       "No relevant code found. The codebase may not be indexed yet — " +
-      "restart the walkthrough to trigger indexing, or run Walkthrough: Index Codebase."
+      "restart the walkthrough to trigger indexing."
     );
   }
+
+  // Show which files were pulled — deduplicated basenames in found order
+  const uniqueFiles = [...new Set(
+    hits.map(h => (h.payload.file ?? "").split(/[\\/]/).pop() ?? h.payload.file ?? "?")
+  )];
+  const fileList = uniqueFiles.slice(0, 5).join("  ·  ");
+  onProgress?.(`Fetched ${hits.length} blocks from: ${fileList}  —  feeding to AI...`);
 
   // ── 3. Build ranked context for the LLM ──────────────────────────────────
   const context = hits
     .map((h, i) => {
-      const snippet = (h.payload.code ?? "").slice(0, 300).replace(/\n/g, " ");
-      return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (${(h.score * 100).toFixed(0)}% relevant):\n  ${snippet}`;
+      const snippet = (h.payload.code ?? "").slice(0, 800);
+      return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (score ${h.score.toFixed(3)}):\n${snippet}`;
     })
-    .join("\n\n");
+    .join("\n\n---\n\n");
 
   // ── 4. LLM answers with retrieved context (RAG) ───────────────────────────
+  onProgress?.(`Asking AI with context from ${uniqueFiles.length} file${uniqueFiles.length !== 1 ? "s" : ""}...`);
   const systemPrompt =
-    "You are a code Q&A assistant. Using ONLY the provided code context, answer the question precisely. " +
+    "You are a code Q&A assistant. Answer the question using the provided code context. " +
+    "Look at imports, variable names, config values, and initialization code to infer the answer — " +
+    "do not require an explicit label; infer from usage patterns. " +
     "Identify the single most relevant block index (N). " +
     'Respond ONLY with valid JSON — no markdown: {"answer": "...", "topIndex": N}';
 
-  const raw   = await callLLM(systemPrompt, `Context:\n${context}\n\nQuestion: ${question}`, 400);
+  const raw = await callLLM(systemPrompt, `Context:\n${context}\n\nQuestion: ${question}`, 400);
   const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
   const jsonMatch = clean.match(/\{[\s\S]*\}/);
   let parsed: { answer?: string; topIndex?: number } = {};
   if (jsonMatch) { try { parsed = JSON.parse(jsonMatch[0]); } catch { /* fall through */ } }
 
-  const topIdx  = typeof parsed.topIndex === "number"
+  const topIdx = typeof parsed.topIndex === "number"
     ? Math.min(Math.max(0, parsed.topIndex), hits.length - 1) : 0;
 
   return {
-    answer:   parsed.answer ?? clean,
+    answer: parsed.answer ?? clean,
     topLabel: hits[topIdx]?.payload?.label ?? "",
-    topFile:  hits[topIdx]?.payload?.file  ?? "",
+    topFile: hits[topIdx]?.payload?.file ?? "",
   };
 }
 

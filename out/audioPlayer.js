@@ -16,8 +16,14 @@ const TMP_FILE = path.join(os.tmpdir(), "walkthrough-narr.wav");
 class AudioPlayer {
     constructor() {
         this.proc = null;
+        this.playStartTime = 0;
+    }
+    /** Milliseconds elapsed since play() was called on the current clip. */
+    get elapsedMs() {
+        return this.playStartTime > 0 ? Date.now() - this.playStartTime : 0;
     }
     play(wavBuffer) {
+        this.playStartTime = Date.now();
         fs.writeFileSync(TMP_FILE, wavBuffer);
         return new Promise((resolve) => {
             const [cmd, args] = AudioPlayer.command(TMP_FILE);

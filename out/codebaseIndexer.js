@@ -32,11 +32,11 @@ const SUPPORTED_EXTS = new Set([".py", ".ts", ".tsx"]);
 /**
  * Fast, synchronous pre-check — reads only the local cache file and file hashes.
  * No network calls. Returns true if any file is new/changed or the provider changed.
- * Use this before showing the indexing UI to avoid unnecessary Jina API calls.
+ * Use this before showing the indexing UI to avoid unnecessary embedding work.
  */
 function needsIndexing(wsRoot, cfg) {
-    const provider = cfg.embeddingProvider ?? "jina";
-    const vectorSize = embedder_1.VECTOR_SIZES[provider] ?? 768;
+    const provider = cfg.embeddingProvider ?? "local";
+    const vectorSize = embedder_1.VECTOR_SIZES[provider] ?? 384;
     const cache = loadCache(wsRoot);
     // Provider or vector size changed → full re-index required
     if (cache.embeddingProvider !== provider || cache.vectorSize !== vectorSize)
@@ -60,8 +60,8 @@ function needsIndexing(wsRoot, cfg) {
     return false; // every file matches the cache — nothing to do
 }
 async function indexWorkspace(wsRoot, cfg, onProgress, onLog) {
-    const provider = cfg.embeddingProvider ?? "jina";
-    const vectorSize = embedder_1.VECTOR_SIZES[provider] ?? 768;
+    const provider = cfg.embeddingProvider ?? "local";
+    const vectorSize = embedder_1.VECTOR_SIZES[provider] ?? 384;
     const qdrantUrl = (process.env.QDRANT_URL ?? "http://localhost:6333").replace(/\/$/, "");
     const qdrantKey = process.env.QDRANT_API_KEY;
     // ── 1. Check Qdrant is reachable ─────────────────────────────────────────

@@ -17,8 +17,15 @@ export class AudioPlayer {
   static volume = 80;
 
   private proc: ChildProcess | null = null;
+  private playStartTime = 0;
+
+  /** Milliseconds elapsed since play() was called on the current clip. */
+  get elapsedMs(): number {
+    return this.playStartTime > 0 ? Date.now() - this.playStartTime : 0;
+  }
 
   play(wavBuffer: Buffer): Promise<void> {
+    this.playStartTime = Date.now();
     fs.writeFileSync(TMP_FILE, wavBuffer);
 
     return new Promise((resolve) => {

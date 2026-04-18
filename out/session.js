@@ -34,12 +34,12 @@ class WalkthroughSession {
         this.prefetchCache = new Map();
         this.narrationCache = new Map();
         // ── Subtitle animation handle ─────────────────────────────────────────────
-        // Returning () => number so cancelSubtitleAnimation() can report the last
-        // displayed word index to the pause handler.
         this.subtitleStopFn = null;
-        // Word index saved at the moment of pause — handed back to the next
-        // startSubtitleAnimation() call so the subtitle resumes mid-sentence.
         this.subtitleResumeIndex = 0;
+        // ── Audio resume ──────────────────────────────────────────────────────────
+        // Accumulated playback time across pause/resume cycles for the current clip.
+        // Used to trim the WAV buffer so audio resumes where it was paused, not SOB.
+        this.audioResumeMs = 0;
         this.log = callbacks.log;
         this.setStatus = callbacks.setStatus;
         this.clearStatus = callbacks.clearStatus;
@@ -92,9 +92,9 @@ class WalkthroughSession {
         this.paused = !this.paused;
         if (this.paused) {
             this.log("  ⏸  Paused");
+            // Capture elapsed BEFORE stop() so we know exactly where the audio was.
+            this.audioResumeMs += this.currentPlayer?.elapsedMs ?? 0;
             this.currentPlayer?.stop();
-            // Save the word index BEFORE the animation closure is cleared,
-            // so playWithControls can resume from this exact word on the next loop.
             this.subtitleResumeIndex = this.cancelSubtitleAnimation();
             this.setPaused?.(true);
         }
@@ -159,9 +159,11 @@ class WalkthroughSession {
         }
         this.log(`\n── Q&A: "${question}" ──`);
         this.setStatus("$(search) Searching codebase...");
-        this.showSubtitle?.("🔍  Searching your codebase...", true);
+        const showProgress = (msg) => {
+            this.showSubtitleWords?.(msg.trim().split(/\s+/), -1, 0);
+        };
         try {
-            const { answer, topLabel, topFile } = await (0, narrate_1.queryCodebase)(question);
+            const { answer, topLabel, topFile } = await (0, narrate_1.queryCodebase)(question, showProgress);
             this.log(`[Q&A] Answer: ${answer}`);
             this.log(`[Q&A] Top match: ${topLabel}${topFile ? ` (${topFile})` : ""}`);
             // Highlight the most relevant block in the editor
@@ -438,8 +440,9 @@ class WalkthroughSession {
      *   starts fresh.
      */
     async playWithControls(audio, subtitleText) {
-        // Reset resume position for each new audio clip (new block or deep-dive chunk).
+        // Reset both resume positions for each new audio clip.
         this.subtitleResumeIndex = 0;
+        this.audioResumeMs = 0;
         // Derive per-word interval from the actual WAV duration so the subtitle
         // advances in perfect lock-step with the TTS voice — no guessing.
         const words = subtitleText.trim().split(/\s+/).filter(Boolean);
@@ -462,7 +465,8 @@ class WalkthroughSession {
             const player = new audioPlayer_1.AudioPlayer();
             this.currentPlayer = player;
             const skipPromise = new Promise(r => { this.skipResolve = r; });
-            const audioPromise = player.play(audio).then(() => "next");
+            const clip = this.audioResumeMs > 0 ? trimWav(audio, this.audioResumeMs) : audio;
+            const audioPromise = player.play(clip).then(() => "next");
             const result = await Promise.race([audioPromise, skipPromise]);
             // togglePause() already called cancelSubtitleAnimation() and saved the index.
             // Call again to clear the ref (safe no-op if already cancelled).
@@ -533,4 +537,37 @@ class WalkthroughSession {
     }
 }
 exports.WalkthroughSession = WalkthroughSession;
+// ── WAV trimmer ───────────────────────────────────────────────────────────────
+// Creates a new WAV buffer starting `skipMs` into the original clip.
+// Assumes standard 44-byte PCM WAV header (what Sarvam TTS produces).
+// Falls back to the original buffer on any parse error.
+function trimWav(wav, skipMs) {
+    if (skipMs <= 0 || wav.length < 44)
+        return wav;
+    try {
+        const byteRate = wav.readUInt32LE(28); // bytes/sec
+        const blockAlign = wav.readUInt16LE(32); // bytes/sample-frame
+        if (byteRate === 0)
+            return wav;
+        const rawSkip = Math.floor((skipMs / 1000) * byteRate);
+        const skipBytes = blockAlign > 0
+            ? Math.floor(rawSkip / blockAlign) * blockAlign
+            : rawSkip;
+        const dataSize = wav.readUInt32LE(40);
+        const clamped = Math.min(skipBytes, dataSize);
+        if (clamped === 0)
+            return wav;
+        const newDataSize = dataSize - clamped;
+        const newTotal = 44 + newDataSize;
+        const out = Buffer.alloc(newTotal);
+        wav.copy(out, 0, 0, 44); // copy header
+        wav.copy(out, 44, 44 + clamped); // copy remaining PCM
+        out.writeUInt32LE(newDataSize + 36, 4); // update RIFF chunk size
+        out.writeUInt32LE(newDataSize, 40); // update data chunk size
+        return out;
+    }
+    catch {
+        return wav;
+    }
+}
 //# sourceMappingURL=session.js.map

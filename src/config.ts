@@ -40,27 +40,24 @@ export const ANTHROPIC_MODELS: ModelOption[] = [
 
 // ── Config shape ──────────────────────────────────────────────────────────────
 
-export type EmbeddingProvider = "jina" | "openai";
+export type EmbeddingProvider = "local";
 
 export interface WalkthroughConfig {
-  provider:           LLMProvider;
-  model:              string;
-  apiKey:             string;              // LLM API key
-  sarvamApiKey:       string;              // Sarvam TTS key
-  customBaseUrl:      string;              // only for provider === "custom"
-  embeddingProvider:  EmbeddingProvider;  // jina | openai
-  embeddingApiKey:    string;              // separate key (Jina) or same as apiKey (OpenAI)
+  provider:          LLMProvider;
+  model:             string;
+  apiKey:            string;   // LLM API key
+  sarvamApiKey:      string;   // Sarvam TTS key
+  customBaseUrl:     string;   // only for provider === "custom"
+  embeddingProvider: EmbeddingProvider;
 }
 
 // ── Secret + setting keys ─────────────────────────────────────────────────────
 
 const S_LLM_KEY       = "walkthrough.llmApiKey";
 const S_SARVAM_KEY    = "walkthrough.sarvamApiKey";
-const S_EMBED_KEY     = "walkthrough.embeddingApiKey";
 const CFG_PROVIDER    = "walkthrough.provider";
 const CFG_MODEL       = "walkthrough.model";
 const CFG_CUSTOM      = "walkthrough.customBaseUrl";
-const CFG_EMBED_PROV  = "walkthrough.embeddingProvider";
 
 // ── Manager ───────────────────────────────────────────────────────────────────
 
@@ -70,35 +67,27 @@ export class ConfigManager {
   async getConfig(): Promise<WalkthroughConfig> {
     const cfg = vscode.workspace.getConfiguration();
 
-    const apiKey          = (await this.secrets.get(S_LLM_KEY))    ?? process.env.GROQ_API_KEY   ?? "";
-    const sarvamKey       = (await this.secrets.get(S_SARVAM_KEY))  ?? process.env.SARVAM_API_KEY ?? "";
-    const embeddingApiKey = (await this.secrets.get(S_EMBED_KEY))
-      ?? process.env.JINA_API_KEY
-      ?? process.env.EMBEDDING_API_KEY
-      ?? "";
-    const provider        = cfg.get<LLMProvider>(CFG_PROVIDER, "groq");
-    const model           = cfg.get<string>(CFG_MODEL, "qwen/qwen3-32b");
-    const customBase      = cfg.get<string>(CFG_CUSTOM, "");
-    const embeddingProv   = cfg.get<EmbeddingProvider>(CFG_EMBED_PROV, "jina");
+    const apiKey     = (await this.secrets.get(S_LLM_KEY))   ?? process.env.GROQ_API_KEY   ?? "";
+    const sarvamKey  = (await this.secrets.get(S_SARVAM_KEY)) ?? process.env.SARVAM_API_KEY ?? "";
+    const provider   = cfg.get<LLMProvider>(CFG_PROVIDER, "groq");
+    const model      = cfg.get<string>(CFG_MODEL, "qwen/qwen3-32b");
+    const customBase = cfg.get<string>(CFG_CUSTOM, "");
 
     return {
       provider, model, apiKey, sarvamApiKey: sarvamKey,
       customBaseUrl: customBase,
-      embeddingProvider: embeddingProv,
-      embeddingApiKey,
+      embeddingProvider: "local",
     };
   }
 
   async saveConfig(config: WalkthroughConfig): Promise<void> {
     await this.secrets.store(S_LLM_KEY,    config.apiKey);
     await this.secrets.store(S_SARVAM_KEY, config.sarvamApiKey);
-    await this.secrets.store(S_EMBED_KEY,  config.embeddingApiKey);
 
     const cfg = vscode.workspace.getConfiguration();
-    await cfg.update(CFG_PROVIDER,   config.provider,           vscode.ConfigurationTarget.Global);
-    await cfg.update(CFG_MODEL,      config.model,              vscode.ConfigurationTarget.Global);
-    await cfg.update(CFG_CUSTOM,     config.customBaseUrl,      vscode.ConfigurationTarget.Global);
-    await cfg.update(CFG_EMBED_PROV, config.embeddingProvider,  vscode.ConfigurationTarget.Global);
+    await cfg.update(CFG_PROVIDER, config.provider,      vscode.ConfigurationTarget.Global);
+    await cfg.update(CFG_MODEL,    config.model,         vscode.ConfigurationTarget.Global);
+    await cfg.update(CFG_CUSTOM,   config.customBaseUrl, vscode.ConfigurationTarget.Global);
   }
 
   /**

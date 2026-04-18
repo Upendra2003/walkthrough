@@ -11,6 +11,7 @@ import {
 import { OnboardingPanel } from "./onboarding";
 import { setActiveConfig, callLLM } from "./narrate";
 import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
+import { disposeEmbedder } from "./embedder";
 import { AudioPlayer } from "./audioPlayer";
 
 // ---------------------------------------------------------------------------
@@ -692,9 +693,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Indexing (builds/updates Qdrant vector store) ────────────────────────
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    if (!sessionConfig.embeddingApiKey) {
-      log("[index] No embedding key — skipping indexing. Configure it via Walkthrough: Configure.");
-    } else if (wsRoot) {
+    if (wsRoot) {
       if (needsIndexing(wsRoot, sessionConfig)) {
         log("[index] New or changed files detected — starting indexing.");
         await runIndexingWithUI(wsRoot, sessionConfig);
@@ -818,4 +817,5 @@ export function deactivate(): void {
   activeGraphPanel?.dispose();
   activeGraphPanel = null;
   setRunning(false);
+  disposeEmbedder();
 }

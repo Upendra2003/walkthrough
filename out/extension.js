@@ -12,6 +12,7 @@ const config_1 = require("./config");
 const onboarding_1 = require("./onboarding");
 const narrate_1 = require("./narrate");
 const codebaseIndexer_1 = require("./codebaseIndexer");
+const embedder_1 = require("./embedder");
 const audioPlayer_1 = require("./audioPlayer");
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -583,10 +584,7 @@ function activate(context) {
         log(`[config] Session: ${picked.provider} · ${picked.model}`);
         // ── Indexing (builds/updates Qdrant vector store) ────────────────────────
         const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!sessionConfig.embeddingApiKey) {
-            log("[index] No embedding key — skipping indexing. Configure it via Walkthrough: Configure.");
-        }
-        else if (wsRoot) {
+        if (wsRoot) {
             if ((0, codebaseIndexer_1.needsIndexing)(wsRoot, sessionConfig)) {
                 log("[index] New or changed files detected — starting indexing.");
                 await runIndexingWithUI(wsRoot, sessionConfig);
@@ -685,5 +683,6 @@ function deactivate() {
     activeGraphPanel?.dispose();
     activeGraphPanel = null;
     setRunning(false);
+    (0, embedder_1.disposeEmbedder)();
 }
 //# sourceMappingURL=extension.js.map

@@ -320,7 +320,7 @@ body {
 
 #subtitle-words {
   font-family: 'Source Sans 3', system-ui, sans-serif;
-  font-size: 15px; font-weight: 400; line-height: 1.55;
+  font-size: 18px; font-weight: 400; line-height: 1.55;
   color: white;
   word-break: break-word; overflow-wrap: break-word;
 }
@@ -336,7 +336,7 @@ body {
 
 #subtitle-loading-msg {
   font-family: 'Source Sans 3', sans-serif;
-  font-size: 12px; font-weight: 300;
+  font-size: 18px; font-weight: 300;
   color: rgba(255,255,255,0.28); font-style: italic;
   display: none;
 }

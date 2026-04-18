@@ -1,80 +1,109 @@
 "use strict";
 /**
- * embedder.ts — API-based embedding generation.
+ * embedder.ts — local embedding via sentence-transformers (all-MiniLM-L6-v2).
  *
- * Supported providers:
- *   jina   → https://api.jina.ai/v1/embeddings   (768 dims, code-specialized, free tier)
- *   openai → https://api.openai.com/v1/embeddings (1536 dims, general, reuses LLM key)
- *
- * No local models. Pure HTTP — same pattern as narrate.ts.
+ * Spawns a persistent Python subprocess on first use; reuses it for all
+ * subsequent calls in the same session.  No API key required.
  */
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.VECTOR_SIZES = void 0;
 exports.embed = embed;
-const https = require("https");
+exports.disposeEmbedder = disposeEmbedder;
+const cp = require("child_process");
 // ── Vector sizes ──────────────────────────────────────────────────────────────
 exports.VECTOR_SIZES = {
-    jina: 768,
-    openai: 1536,
+    local: 384,
 };
+// ── Persistent Python process ─────────────────────────────────────────────────
+const EMBED_SCRIPT = [
+    "import sys, json",
+    "from sentence_transformers import SentenceTransformer",
+    "model = SentenceTransformer('all-MiniLM-L6-v2')",
+    "sys.stdout.write('ready\\n')",
+    "sys.stdout.flush()",
+    "for line in sys.stdin:",
+    "    line = line.strip()",
+    "    if not line: continue",
+    "    texts = json.loads(line)",
+    "    vecs = model.encode(texts).tolist()",
+    "    sys.stdout.write(json.dumps(vecs) + '\\n')",
+    "    sys.stdout.flush()",
+].join("\n");
+let proc = null;
+let procReady = false;
+let lineBuffer = "";
+const queue = [];
+function handleLine(line) {
+    const req = queue.shift();
+    if (!req)
+        return;
+    try {
+        req.resolve(JSON.parse(line));
+    }
+    catch (e) {
+        req.reject(new Error(`Local embedder parse error: ${e}`));
+    }
+}
+function ensureProc() {
+    if (proc && !proc.killed && procReady)
+        return Promise.resolve();
+    return new Promise((resolve, reject) => {
+        proc = cp.spawn("python", ["-u", "-c", EMBED_SCRIPT]);
+        procReady = false;
+        lineBuffer = "";
+        let startupDone = false;
+        proc.stdout.on("data", (data) => {
+            lineBuffer += data.toString();
+            const lines = lineBuffer.split("\n");
+            lineBuffer = lines.pop();
+            for (const line of lines) {
+                if (!line.trim())
+                    continue;
+                if (!startupDone) {
+                    if (line.trim() === "ready") {
+                        startupDone = true;
+                        procReady = true;
+                        resolve();
+                    }
+                }
+                else {
+                    handleLine(line);
+                }
+            }
+        });
+        proc.stderr.on("data", (_d) => { });
+        proc.on("error", (e) => {
+            if (!startupDone) {
+                reject(new Error(`Failed to start Python embedder: ${e.message}\n` +
+                    "Make sure Python and sentence-transformers are installed:\n" +
+                    "  pip install sentence-transformers"));
+            }
+        });
+        proc.on("close", (code) => {
+            procReady = false;
+            proc = null;
+            const remaining = queue.splice(0);
+            for (const r of remaining) {
+                r.reject(new Error(`Python embedder process exited with code ${code}`));
+            }
+        });
+    });
+}
 // ── Public API ────────────────────────────────────────────────────────────────
-/**
- * Embed a batch of texts.  Returns one float32 vector per input.
- * Batches are processed in one API call (both Jina and OpenAI support multi-input).
- */
-async function embed(texts, cfg) {
+async function embed(texts, _cfg) {
     if (!texts.length)
         return [];
-    const provider = cfg.embeddingProvider ?? "jina";
-    const key = cfg.embeddingApiKey ?? "";
-    if (!key)
-        throw new Error(`Embedding API key not set — open Walkthrough: Configure to add your ${provider === "jina" ? "Jina AI" : "OpenAI"} key.`);
-    if (provider === "openai")
-        return embedOpenAI(texts, key);
-    return embedJina(texts, key);
-}
-// ── Jina AI ───────────────────────────────────────────────────────────────────
-async function embedJina(texts, apiKey) {
-    const raw = await httpPost("https://api.jina.ai/v1/embeddings", { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, { model: "jina-embeddings-v2-base-code", input: texts });
-    const json = JSON.parse(raw);
-    const errMsg = json.detail ?? json.message;
-    if (errMsg || !json.data)
-        throw new Error(`Jina AI embedding error: ${errMsg ?? "no data returned"}`);
-    // Sort by index (Jina guarantees order but let's be safe)
-    return [...json.data]
-        .sort((a, b) => a.index - b.index)
-        .map(d => d.embedding);
-}
-// ── OpenAI ────────────────────────────────────────────────────────────────────
-async function embedOpenAI(texts, apiKey) {
-    const raw = await httpPost("https://api.openai.com/v1/embeddings", { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" }, { model: "text-embedding-3-small", input: texts });
-    const json = JSON.parse(raw);
-    if (json.error)
-        throw new Error(`OpenAI embedding error: ${json.error.message}`);
-    if (!json.data)
-        throw new Error("OpenAI: no embedding data returned");
-    return [...json.data]
-        .sort((a, b) => a.index - b.index)
-        .map(d => d.embedding);
-}
-// ── Raw HTTP helper ───────────────────────────────────────────────────────────
-function httpPost(url, headers, body) {
+    await ensureProc();
     return new Promise((resolve, reject) => {
-        const bodyStr = JSON.stringify(body);
-        const req = https.request({
-            hostname: new URL(url).hostname,
-            path: new URL(url).pathname,
-            method: "POST",
-            headers: { ...headers, "Content-Length": Buffer.byteLength(bodyStr) },
-        }, (res) => {
-            const chunks = [];
-            res.on("data", (c) => chunks.push(c));
-            res.on("end", () => resolve(Buffer.concat(chunks).toString("utf8")));
-            res.on("error", reject);
-        });
-        req.on("error", reject);
-        req.write(bodyStr);
-        req.end();
+        queue.push({ resolve, reject });
+        proc.stdin.write(JSON.stringify(texts) + "\n");
     });
+}
+function disposeEmbedder() {
+    if (proc && !proc.killed) {
+        proc.stdin.end();
+    }
+    proc = null;
+    procReady = false;
 }
 //# sourceMappingURL=embedder.js.map
