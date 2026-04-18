@@ -277,11 +277,11 @@ function makeQdrantRequest(method, urlPath, body) {
 async function queryCodebase(question, onProgress) {
     const cfg = getConfig();
     // ── 1. Embed the question ─────────────────────────────────────────────────
-    onProgress?.("🔍  Analysing your question...");
+    onProgress?.("Analysing your question...");
     const vectors = await (0, embedder_1.embed)([question], cfg);
     const qVector = vectors[0];
     // ── 2. Vector search in Qdrant ────────────────────────────────────────────
-    onProgress?.("📡  Searching the codebase index...");
+    onProgress?.("Searching the codebase index...");
     const searchRes = await makeQdrantRequest("POST", "/collections/code_blocks/points/search", {
         vector: qVector,
         limit: 10,
@@ -298,7 +298,7 @@ async function queryCodebase(question, onProgress) {
     // Show which files were pulled — deduplicated basenames in found order
     const uniqueFiles = [...new Set(hits.map(h => (h.payload.file ?? "").split(/[\\/]/).pop() ?? h.payload.file ?? "?"))];
     const fileList = uniqueFiles.slice(0, 5).join("  ·  ");
-    onProgress?.(`📂  Fetched ${hits.length} blocks from: ${fileList}  —  feeding to AI...`);
+    onProgress?.(`Fetched ${hits.length} blocks from: ${fileList}  —  feeding to AI...`);
     // ── 3. Build ranked context for the LLM ──────────────────────────────────
     const context = hits
         .map((h, i) => {
@@ -307,7 +307,7 @@ async function queryCodebase(question, onProgress) {
     })
         .join("\n\n---\n\n");
     // ── 4. LLM answers with retrieved context (RAG) ───────────────────────────
-    onProgress?.(`🤖  Asking AI with context from ${uniqueFiles.length} file${uniqueFiles.length !== 1 ? "s" : ""}...`);
+    onProgress?.(`Asking AI with context from ${uniqueFiles.length} file${uniqueFiles.length !== 1 ? "s" : ""}...`);
     const systemPrompt = "You are a code Q&A assistant. Answer the question using the provided code context. " +
         "Look at imports, variable names, config values, and initialization code to infer the answer — " +
         "do not require an explicit label; infer from usage patterns. " +

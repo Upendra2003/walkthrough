@@ -5,11 +5,18 @@ const vscode = require("vscode");
 const narrate_1 = require("./narrate");
 const audioPlayer_1 = require("./audioPlayer");
 // ── Subtitle animation constants ──────────────────────────────────────────────
-/**
- * Fallback word interval when we cannot derive duration from the audio buffer
- * (Q&A path, deep-dive chunks, error cases).
- */
 const SUBTITLE_WORD_MS_FALLBACK = 420;
+// ── Player startup delay ──────────────────────────────────────────────────────
+// Time between spawning the audio process and the first audio sample playing.
+// Run `node scripts/measure-audio-delay.js` to get your machine's actual values,
+// then update the numbers below.
+//
+// Windows: PowerShell + SoundPlayer cold-start is ~300-500 ms.
+// Q&A path gets extra headroom because the system is busier post-LLM call.
+const PLAYER_STARTUP_MS = process.platform === "win32" ? 757 :
+    process.platform === "darwin" ? 50 : 0;
+const PLAYER_STARTUP_MS_QA = process.platform === "win32" ? 907 :
+    process.platform === "darwin" ? 80 : 0;
 // ---------------------------------------------------------------------------
 // WalkthroughSession
 // ---------------------------------------------------------------------------
@@ -173,22 +180,28 @@ class WalkthroughSession {
                 this.editor.setDecorations(this.qaDecorationType, [range]);
                 this.editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
             }
-            // Speak the answer with subtitle animation
+            // Speak the answer — generate audio first so we can derive word timing,
+            // then delay subtitle start to match player startup latency.
             this.setStatus("$(megaphone) Q&A — speaking answer...");
-            this.startSubtitleAnimation(answer);
             try {
                 const audio = await (0, narrate_1.generateAudio)(answer);
                 if (!this.stopped) {
+                    const qaWords = answer.trim().split(/\s+/).filter(Boolean);
+                    const qaIntervalMs = this.estimateWordIntervalMs(audio, qaWords.length);
                     const player = new audioPlayer_1.AudioPlayer();
                     this.currentPlayer = player;
-                    await player.play(audio);
+                    const audioPromise = player.play(audio);
+                    await new Promise(r => setTimeout(r, PLAYER_STARTUP_MS_QA));
+                    if (!this.stopped)
+                        this.startSubtitleAnimation(answer, 0, qaIntervalMs);
+                    await audioPromise;
                     this.currentPlayer = null;
                 }
             }
             catch (ttsErr) {
                 const msg = ttsErr instanceof Error ? ttsErr.message : String(ttsErr);
                 this.log(`[Q&A] TTS error: ${msg}`);
-                // No audio — subtitle stays visible for a moment so user can read it
+                this.showSubtitle?.(answer);
                 await new Promise(r => setTimeout(r, 4000));
             }
             finally {
@@ -458,15 +471,17 @@ class WalkthroughSession {
                 this.pendingSkip = null;
                 return dir;
             }
-            // Start (or resume) subtitle from the saved word position.
-            // First play: subtitleResumeIndex = 0.
-            // After pause/resume: subtitleResumeIndex = word where audio was paused.
-            this.startSubtitleAnimation(subtitleText, this.subtitleResumeIndex, wordIntervalMs);
             const player = new audioPlayer_1.AudioPlayer();
             this.currentPlayer = player;
             const skipPromise = new Promise(r => { this.skipResolve = r; });
             const clip = this.audioResumeMs > 0 ? trimWav(audio, this.audioResumeMs) : audio;
             const audioPromise = player.play(clip).then(() => "next");
+            // Wait for the player process to actually start outputting audio before
+            // beginning the subtitle animation — closes the PowerShell startup gap.
+            await new Promise(r => setTimeout(r, PLAYER_STARTUP_MS));
+            if (!this.stopped && !this.paused) {
+                this.startSubtitleAnimation(subtitleText, this.subtitleResumeIndex, wordIntervalMs);
+            }
             const result = await Promise.race([audioPromise, skipPromise]);
             // togglePause() already called cancelSubtitleAnimation() and saved the index.
             // Call again to clear the ref (safe no-op if already cancelled).

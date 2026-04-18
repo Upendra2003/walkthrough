@@ -337,16 +337,28 @@ body {
 #subtitle-loading-msg {
   font-family: 'Source Sans 3', sans-serif;
   font-size: 18px; font-weight: 300;
-  color: rgba(255,255,255,0.28); font-style: italic;
+  color: rgba(255,255,255,0.9); font-style: italic;
   display: none;
 }
 @keyframes subtitlePulse {
-  0%, 100% { opacity: 0.15; }
-  50%       { opacity: 0.5; }
+  0%, 100% { opacity: 0.3; }
+  50%       { opacity: 1; }
 }
 #subtitle-loading-msg.pulsing {
   display: block;
   animation: subtitlePulse 1.6s ease infinite;
+}
+
+/* Animated dots shown after Q&A progress messages */
+.anim-dots span {
+  animation: dotFade 1.4s ease-in-out infinite;
+  opacity: 0.2;
+}
+.anim-dots span:nth-child(2) { animation-delay: 0.2s; }
+.anim-dots span:nth-child(3) { animation-delay: 0.4s; }
+@keyframes dotFade {
+  0%, 80%, 100% { opacity: 0.2; }
+  40%            { opacity: 1; }
 }
 
 /* ════ Progress / read-line — pure #FF0000, no glow ════ */
@@ -740,8 +752,9 @@ function updateSubtitle(words, activeIndex, intervalMs) {
   el.innerHTML = '';
 
   if (activeIndex < 0) {
-    el.textContent = words.join(' ');
-    el.style.opacity = '0.72';
+    el.innerHTML = words.join(' ') +
+      ' <span class="anim-dots"><span>.</span><span>.</span><span>.</span></span>';
+    el.style.opacity = '1';
     setProgress(0);
     return;
   }
