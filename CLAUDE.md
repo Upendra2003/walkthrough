@@ -42,9 +42,14 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 **Audio/subtitle sync:** `estimateWordIntervalMs(audio, wordCount)` reads the WAV header (`byteRate` at offset 28, `dataChunkSize` at offset 40) to derive exact audio duration, then divides by word count. Clamped to [80, 900] ms. Falls back to `SUBTITLE_WORD_MS_FALLBACK = 420ms` on malformed headers. This value drives both `startSubtitleAnimation` timing and the CSS transition on the red progress bar.
 
+**Player startup delay:** On Windows, PowerShell + SoundPlayer takes ~750 ms to produce the first audio sample after spawn. Two constants at the top of `session.ts` (measured by `scripts/measure-audio-delay.js`) compensate by delaying subtitle start:
+- `PLAYER_STARTUP_MS = 757` — regular block playback: player spawns → wait → subtitle starts
+- `PLAYER_STARTUP_MS_QA = 907` — Q&A answer: busier post-LLM, needs extra headroom
+The Q&A path also generates audio before starting the player (old code started subtitle before `generateAudio` returned, causing severe drift).
+
 **Volume control:** `AudioPlayer.volume` (0–100, default 80) is a static field read at play-time. Platform: macOS → `afplay -v`; Windows → PowerShell `waveOutSetVolume` P/Invoke + SoundPlayer; Linux → `aplay` (no volume flag).
 
-**Subtitles (sliding window):** `graphPanel.ts` webview renders a 10-word chunk around the current `activeIndex`. Font size 18px. The loading/preparing message (`#subtitle-loading-msg`) is also 18px, pulsing. For non-animated messages (`activeIndex = -1`), all words render as plain text at 72% opacity — used for Q&A progress updates and indexing vibes.
+**Subtitles (sliding window):** `graphPanel.ts` webview renders a 10-word chunk around the current `activeIndex`. Font size 18px. The loading/preparing message (`#subtitle-loading-msg`) is 18px, white (`rgba(255,255,255,0.9)`), pulsing between 30%–100% opacity. For non-animated messages (`activeIndex = -1`) — Q&A progress steps and indexing vibes — text renders at full white opacity followed by three pulsing dots (`.anim-dots`, staggered `dotFade` animation) to indicate the system is working.
 
 **Language picker:** Subtitle icon opens a dropdown (English / Hindi / Kannada / Telugu). Posts `{ type:'control', action:'lang-<code>' }`, applies matching font class to `#subtitle-words`.
 

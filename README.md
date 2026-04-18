@@ -23,17 +23,26 @@ You are never just reading. You are watching, listening, and asking.
 |---|---|
 | **Voice narration** | Plays automatically, block by block |
 | **Netflix-style subtitles** | Word-by-word animation — sliding 10-word window, stays in sync |
-| **Pause / Resume** | `Space` or the ⏸ button — resumes from the exact word it stopped at |
-| **Skip block** | `→` or `S` |
+| **Pause / Resume** | `Space` or the ⏸ button — resumes audio from exact pause point, subtitle from exact word |
+| **Skip block** | `→` |
 | **Go back** | `←` |
 | **Deep Dive** | `D` — line-by-line walkthrough of any block |
 | **Ask anything** | `Q` — ask a question, get a spoken answer from your codebase |
 | **Skip file** | `F` — jump to the next file in the import graph |
 | **Stop** | `Esc` — stops walkthrough and closes the codebase map panel |
-| **In-panel controls** | ⏮ ⏸ ⏭ + Skip · Dive · File · Ask · Stop — always visible in the graph panel |
+| **In-panel controls** | ⏮ ⏸ ⏭ + DeepDive · Volume · Language · Ask · Next File · Stop |
 
 ### Ask (Q&A)
-Press `Q` at any point. Type your question. The extension embeds it, searches your indexed codebase in Qdrant, retrieves the most relevant code blocks, and speaks the answer back to you — with the matching code highlighted in the editor.
+Press `Q` at any point. Type your question. The extension shows you exactly what it's doing — live in the subtitle zone:
+
+```
+🔍 Analysing your question...
+📡 Searching the codebase index...
+📂 Fetched 8 blocks from: database.py · models.py · routes/auth.py — feeding to AI...
+🤖 Asking AI with context from 3 files...
+```
+
+Then it speaks the answer back with word-by-word subtitles, and highlights the most relevant block in the editor.
 
 ```
 Q: "how is auth handled?"
@@ -48,7 +57,7 @@ Q: "how is auth handled?"
 Walkthrough automatically builds an import graph from your entry point, traverses it in DFS order, and walks through every file — tracking progress in a live knowledge graph panel.
 
 ### Codebase indexing
-On every session start, Walkthrough scans your project, embeds every semantic block using Jina AI, and stores the vectors in Qdrant. Unchanged files are skipped (hash cache). The Q&A feature uses these vectors for retrieval-augmented answers.
+On every session start, Walkthrough scans your project, embeds every semantic block using a **local `all-MiniLM-L6-v2` model** (no API key needed), and stores the vectors in Qdrant. Unchanged files are skipped via a hash cache. The Q&A feature uses these vectors for retrieval-augmented answers.
 
 ---
 
@@ -57,24 +66,31 @@ On every session start, Walkthrough scans your project, embeds every semantic bl
 ### 1. Install the extension
 Open VS Code → Extensions → search **Walkthrough** → Install.
 
-### 2. Configure (first launch)
+### 2. Install sentence-transformers (one-time)
+Codebase indexing and Q&A run fully locally — no embedding API key needed.
+
+```bash
+pip install sentence-transformers
+```
+
+The `all-MiniLM-L6-v2` model (~90 MB) will be downloaded automatically on first use and cached at `~/.cache/huggingface/hub/`.
+
+### 3. Configure (first launch)
 The setup wizard opens automatically. You need:
 
 | Key | Where to get it |
 |---|---|
 | **LLM API key** | [console.groq.com](https://console.groq.com) (free) — or OpenAI / Anthropic |
 | **Sarvam AI key** | [dashboard.sarvam.ai](https://dashboard.sarvam.ai) (free) — voice narration |
-| **Jina AI key** | [jina.ai](https://jina.ai) (free, 1M tokens) — codebase search & Q&A |
 | **Qdrant** | [cloud.qdrant.io](https://cloud.qdrant.io) (free tier) or run locally |
 
 Reopen the wizard anytime via `Ctrl+Shift+P` → **Walkthrough: Configure**.
 
-### 3. Environment variables (optional, for local dev)
+### 4. Environment variables (optional, for local dev)
 
 ```env
 GROQ_API_KEY=...
 SARVAM_API_KEY=...
-JINA_API_KEY=...
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=...
 ```
@@ -85,7 +101,6 @@ QDRANT_API_KEY=...
 
 - TypeScript / TSX
 - Python
-- JavaScript (partial)
 
 ---
 
@@ -103,16 +118,16 @@ QDRANT_API_KEY=...
 ## Architecture
 
 ```
-extension.ts        activation, commands, status bar info, indexing UI
+extension.ts        activation, commands, indexing UI, session orchestrator
 ├── graph.ts        import graph builder (DFS traversal order)
 ├── graphPanel.ts   unified right panel — file tree + subtitle zone + video controls
 ├── parser.ts       tree-sitter semantic block parser (TS + Python)
-├── session.ts      playback engine — pause/resume (word-level), skip, deep dive, Q&A
-├── narrate.ts      LLM narration, Sarvam TTS, Qdrant Q&A (RAG)
-├── embedder.ts     Jina AI / OpenAI embedding API
-├── codebaseIndexer.ts  workspace scanner + Qdrant vector upsert
-├── audioPlayer.ts  cross-platform audio (PowerShell / afplay / aplay)
-├── onboarding.ts   setup wizard (4-step webview)
+├── session.ts      playback engine — pause/resume (audio trim + word resume), skip, deep dive, Q&A
+├── narrate.ts      LLM narration, Sarvam TTS, Qdrant Q&A (RAG + live progress)
+├── embedder.ts     local all-MiniLM-L6-v2 via persistent Python subprocess
+├── codebaseIndexer.ts  workspace scanner + Qdrant vector upsert (384-dim)
+├── audioPlayer.ts  cross-platform audio (PowerShell / afplay / aplay) + elapsedMs
+├── onboarding.ts   setup wizard (3-step webview — no embedding key step)
 └── config.ts       SecretStorage + VS Code settings manager
 ```
 
@@ -126,7 +141,6 @@ extension.ts        activation, commands, status bar info, indexing UI
 | Pause / Resume | `Space` |
 | Previous block | `←` |
 | Next block | `→` |
-| Skip block | `S` or `Ctrl+Shift+.` |
 | Deep Dive | `D` or `Ctrl+Shift+I` |
 | Skip file | `F` or `Ctrl+Shift+,` |
 | Ask (Q&A) | `Q` or `Ctrl+Shift+/` |
@@ -148,7 +162,6 @@ Write notes directly beside code blocks while listening. Attached to the block, 
 - Tree-sitter grammar improvements for better block detection
 - Additional language support (Go, Rust, Java)
 - Alternative TTS providers
-- Offline embedding model support (no API key required)
 
 ---
 
