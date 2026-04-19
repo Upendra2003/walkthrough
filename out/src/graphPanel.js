@@ -62,6 +62,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.GraphPanel = void 0;
 const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
 const PYTHON_SVG = '<svg width="14" height="14" viewBox="0 0 16 16" ' +
     'xmlns="http://www.w3.org/2000/svg" fill="currentColor">' +
     '<path fill-rule="evenodd" clip-rule="evenodd" d="M12.3753 4.5C13.1843 4.47123 ' +
@@ -102,10 +103,14 @@ class GraphPanel {
         this.controlCallback = null;
         this.disposed = false;
         const assetsUri = vscode.Uri.joinPath(context.extensionUri, "assets");
+        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const videoRoot = wsRoot
+            ? vscode.Uri.file(path.join(wsRoot, ".vscode", "walkthrough-videos"))
+            : undefined;
         this.panel = vscode.window.createWebviewPanel("walkthroughGraph", "Walkthrough — Codebase Map", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {
             enableScripts: true,
             retainContextWhenHidden: true,
-            localResourceRoots: [assetsUri],
+            localResourceRoots: videoRoot ? [assetsUri, videoRoot] : [assetsUri],
         });
         const w = this.panel.webview;
         const uri = (file) => w.asWebviewUri(vscode.Uri.joinPath(assetsUri, file)).toString();
@@ -135,8 +140,15 @@ class GraphPanel {
         this.panel.webview.postMessage({ type: "update", tree: serializeNode(root) });
     }
     postMessage(msg) {
-        if (!this.disposed)
-            this.panel.webview.postMessage(msg);
+        if (this.disposed)
+            return;
+        const m = msg;
+        if (m.type === 'set-video-src' && typeof m.path === 'string') {
+            const uri = this.panel.webview.asWebviewUri(vscode.Uri.file(m.path)).toString();
+            this.panel.webview.postMessage({ ...m, uri });
+            return;
+        }
+        this.panel.webview.postMessage(msg);
     }
     setPaused(paused) {
         if (!this.disposed)
@@ -170,7 +182,7 @@ function buildHtml(root, cspSource, icons) {
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline'; img-src ${cspSource};">
+      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline'; img-src ${cspSource}; media-src ${cspSource};">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500&display=swap');
@@ -182,22 +194,51 @@ function buildHtml(root, cspSource, icons) {
 html, body { height: 100%; overflow: hidden; }
 
 body {
-  background: var(--vscode-editor-background, #1e1e2e);
+  background: #0d1117;
   color: var(--vscode-foreground, #cdd6f4);
   font-family: 'Source Sans 3', var(--vscode-font-family, 'Segoe UI'), system-ui, sans-serif;
   font-size: 13px;
   display: flex;
   flex-direction: column;
   height: 100vh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
   user-select: none;
+}
+
+/* ════ Video zone ════ */
+#video-zone {
+  flex: 0 0 auto;
+  width: 100%;
+  background: #000;
+  display: none;
+  position: relative;
+}
+#walkthrough-video {
+  width: 100%;
+  display: block;
+  max-height: 320px;
+  object-fit: contain;
+}
+#video-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #0d1117;
+  color: rgba(255,255,255,0.4);
+  font: 13px 'JetBrains Mono', monospace;
 }
 
 /* ════ Graph section ════ */
 #graph-section {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   padding: 16px 12px 12px;
   min-height: 0;
+  max-height: 180px;
 }
 
 #header {
@@ -546,7 +587,13 @@ body {
 </head>
 <body>
 
-<!-- ① File tree -->
+<!-- ① Video zone — hidden until MP4 is ready -->
+<div id="video-zone">
+  <video id="walkthrough-video" preload="auto" muted></video>
+  <div id="video-loading">&#x23F3; Generating visuals...</div>
+</div>
+
+<!-- ② File tree -->
 <div id="graph-section">
   <div id="header">
     <h2>&#x2B21; Codebase Map</h2>
@@ -644,6 +691,9 @@ var vscode       = acquireVsCodeApi();
 var INITIAL_TREE = ${initialJson};
 var PYTHON_SVG   = ${pythonSvgJs};
 var ICONS        = ${iconsJs};
+
+// ── Session state ─────────────────────────────────────────────────────────────
+var isPaused = false;
 
 // ── Render state ──────────────────────────────────────────────────────────────
 var chapterCounter   = 0;
@@ -856,13 +906,56 @@ document.getElementById('controls-bar').addEventListener('click', function(e) {
 // ── Message handler ───────────────────────────────────────────────────────────
 
 window.addEventListener('message', function(event) {
-  var msg = event.data;
-  if      (msg.type === 'update')           render(msg.tree);
-  else if (msg.type === 'subtitle')         updateSubtitle(msg.words, msg.activeIndex, msg.intervalMs);
-  else if (msg.type === 'subtitle-loading') showSubtitleLoading();
-  else if (msg.type === 'subtitle-hide')    hideSubtitle();
-  else if (msg.type === 'subtitle-language') applyLang(msg.code, msg.label || '');
-  else if (msg.type === 'set-paused')       applyPausedState(msg.paused);
+  var data = event.data;
+  switch (data.type) {
+    case 'update':
+      render(data.tree);
+      break;
+    case 'subtitle':
+      updateSubtitle(data.words, data.activeIndex, data.intervalMs);
+      break;
+    case 'subtitle-loading':
+      showSubtitleLoading();
+      break;
+    case 'subtitle-hide':
+      hideSubtitle();
+      break;
+    case 'subtitle-language':
+      applyLang(data.code, data.label || '');
+      break;
+    case 'set-paused': {
+      isPaused = data.paused;
+      applyPausedState(data.paused);
+      var videoP = document.getElementById('walkthrough-video');
+      if (videoP) {
+        if (data.paused) { videoP.pause(); }
+        else             { videoP.play().catch(function(){}); }
+      }
+      break;
+    }
+    case 'set-video-src': {
+      var videoS  = document.getElementById('walkthrough-video');
+      var zone    = document.getElementById('video-zone');
+      var loadEl  = document.getElementById('video-loading');
+      if (!videoS || !zone) break;
+      videoS.src = data.uri;
+      zone.style.display = 'block';
+      if (loadEl) loadEl.style.display = 'flex';
+      videoS.oncanplay = function() {
+        if (loadEl) loadEl.style.display = 'none';
+      };
+      if (!isPaused) videoS.play().catch(function(){});
+      break;
+    }
+    case 'video-reset': {
+      var videoR = document.getElementById('walkthrough-video');
+      if (videoR) {
+        videoR.currentTime = 0;
+        if (!isPaused) videoR.play().catch(function(){});
+      }
+      break;
+    }
+  }
 });
 
 // Init — mark English as selected by default

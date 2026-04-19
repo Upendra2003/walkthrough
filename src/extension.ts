@@ -13,6 +13,7 @@ import { setActiveConfig, callLLM } from "./narrate";
 import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
 import { disposeEmbedder } from "./embedder";
 import { AudioPlayer } from "./audioPlayer";
+import { clearVideoCache } from "./videoRenderer";
 
 // ---------------------------------------------------------------------------
 // Module-level state
@@ -167,7 +168,8 @@ async function findRootFile(): Promise<{ uri: vscode.Uri; label: string } | unde
 async function runMultiFileWalkthrough(
   extensionContext: vscode.ExtensionContext,
   rootUri: vscode.Uri,
-  rootFileContext: string | undefined
+  rootFileContext: string | undefined,
+  sessionCfg?: WalkthroughConfig
 ): Promise<void> {
   const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
     ?? path.dirname(rootUri.fsPath);
@@ -194,7 +196,7 @@ async function runMultiFileWalkthrough(
     sbInfo.backgroundColor = undefined;
     const doc    = await vscode.workspace.openTextDocument(rootUri);
     const editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
-    await runSingleFile(editor, rootFileContext);
+    await runSingleFile(editor, rootFileContext, sessionCfg);
     return;
   }
 
@@ -304,7 +306,14 @@ async function runMultiFileWalkthrough(
     currentFilePrefix = `${langLabel(node.language)}  ·  ${path.basename(node.file)}`;
 
     const ctx     = node.depth === 0 ? rootFileContext : undefined;
-    const session = new WalkthroughSession(editor, blocks, ctx ?? null, makeCallbacks());
+    const session = new WalkthroughSession(editor, blocks, ctx ?? null, makeCallbacks(),
+      sessionCfg && activeGraphPanel ? {
+        wsRoot,
+        filePath: node.file,
+        panel:    activeGraphPanel,
+        cfg:      sessionCfg,
+      } : undefined
+    );
 
     activeSession = session;
     log(`[session] ${node.relativePath}  (⏮←  ⏸Space  ⏭→  S:Skip  D:Dive  F:SkipFile  Q:Ask  Esc:Stop)`);
@@ -345,7 +354,8 @@ async function runMultiFileWalkthrough(
 
 async function runSingleFile(
   editor: vscode.TextEditor,
-  fileContext?: string
+  fileContext?: string,
+  sessionCfg?: WalkthroughConfig
 ): Promise<void> {
   const { languageId, fileName } = editor.document;
   log(`[launch] File: ${fileName}  Language: ${languageId}`);
@@ -375,7 +385,16 @@ async function runSingleFile(
 
   currentFilePrefix = `${langLabel(languageId)}  ·  ${path.basename(fileName)}`;
 
-  const session = new WalkthroughSession(editor, blocks, fileContext ?? null, makeCallbacks());
+  const sfWsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    ?? path.dirname(editor.document.uri.fsPath);
+  const session = new WalkthroughSession(editor, blocks, fileContext ?? null, makeCallbacks(),
+    sessionCfg ? {
+      wsRoot:   sfWsRoot,
+      filePath: editor.document.fileName,
+      panel:    activeGraphPanel ?? { postMessage: () => undefined },
+      cfg:      sessionCfg,
+    } : undefined
+  );
   activeSession = session;
 
   log("[session] ⏮←  ⏸Space  ⏭→  S:Skip  D:Dive  Q:Ask  Esc:Stop");
@@ -697,6 +716,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
     // ── Indexing (builds/updates Qdrant vector store) ────────────────────────
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (wsRoot) clearVideoCache(wsRoot);
     if (wsRoot) {
       if (needsIndexing(wsRoot, sessionConfig)) {
         log("[index] New or changed files detected — starting indexing.");
@@ -733,7 +753,7 @@ export function activate(context: vscode.ExtensionContext): void {
       const mainUri = vscode.Uri.file(mainFile);
       const doc     = await vscode.workspace.openTextDocument(mainUri);
       await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
-      await runMultiFileWalkthrough(context, mainUri, undefined);
+      await runMultiFileWalkthrough(context, mainUri, undefined, sessionConfig);
 
     } finally {
       setRunning(false);

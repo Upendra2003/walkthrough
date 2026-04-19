@@ -37,6 +37,8 @@ exports.WalkthroughSession = void 0;
 const vscode = __importStar(require("vscode"));
 const narrate_1 = require("./narrate");
 const audioPlayer_1 = require("./audioPlayer");
+const videoRenderer_1 = require("./videoRenderer");
+const generateBlueprint_1 = require("./generateBlueprint");
 // ── Subtitle animation constants ──────────────────────────────────────────────
 const SUBTITLE_WORD_MS_FALLBACK = 420;
 // ── Player startup delay ──────────────────────────────────────────────────────
@@ -54,7 +56,7 @@ const PLAYER_STARTUP_MS_QA = process.platform === "win32" ? 907 :
 // WalkthroughSession
 // ---------------------------------------------------------------------------
 class WalkthroughSession {
-    constructor(editor, blocks, fileContext, callbacks) {
+    constructor(editor, blocks, fileContext, callbacks, videoOpts) {
         this.editor = editor;
         this.blocks = blocks;
         this.fileContext = fileContext;
@@ -81,6 +83,9 @@ class WalkthroughSession {
         // ── Prefetch / narration cache ────────────────────────────────────────────
         this.prefetchCache = new Map();
         this.narrationCache = new Map();
+        // ── Video render cache ────────────────────────────────────────────────────
+        this.videoCacheMap = new Map();
+        this.blueprintCache = new Map();
         // ── Subtitle animation handle ─────────────────────────────────────────────
         this.subtitleStopFn = null;
         this.subtitleResumeIndex = 0;
@@ -88,6 +93,10 @@ class WalkthroughSession {
         // Accumulated playback time across pause/resume cycles for the current clip.
         // Used to trim the WAV buffer so audio resumes where it was paused, not SOB.
         this.audioResumeMs = 0;
+        this.wsRoot = videoOpts?.wsRoot;
+        this.filePath = videoOpts?.filePath;
+        this.panel = videoOpts?.panel;
+        this.cfg = videoOpts?.cfg;
         this.log = callbacks.log;
         this.setStatus = callbacks.setStatus;
         this.clearStatus = callbacks.clearStatus;
@@ -118,6 +127,7 @@ class WalkthroughSession {
     async run() {
         this.log(`\n── Starting walkthrough — whole-file narration (press D for block-by-block) ──`);
         this.kickPrefetch(0);
+        this.prefetchVideo(0);
         // Phase 1: narrate the whole file as a single overview block
         await this.presentBlock(0);
         // Phase 2: if D was pressed during the overview, go block-by-block through functions
@@ -339,6 +349,54 @@ class WalkthroughSession {
             return;
         this.prefetchCache.set(i, this.fetchAudio(i));
     }
+    prefetchVideo(blockIndex) {
+        if (!this.wsRoot || !this.filePath || !this.cfg) {
+            this.log(`[video] block ${blockIndex}: skipped — videoOpts not provided`);
+            return;
+        }
+        if (this.videoCacheMap.has(blockIndex))
+            return;
+        if (blockIndex >= this.blocks.length)
+            return;
+        const block = this.blocks[blockIndex];
+        const narration = this.narrationCache.get(blockIndex) ?? '';
+        if (!narration) {
+            this.log(`[video] block ${blockIndex}: skipped — narration not cached yet`);
+            return;
+        }
+        const wsRoot = this.wsRoot;
+        const filePath = this.filePath;
+        const cfg = this.cfg;
+        const panel = this.panel;
+        this.log(`[video] block ${blockIndex} (${block.label}): generating blueprint...`);
+        const promise = (async () => {
+            try {
+                const blueprint = await (0, generateBlueprint_1.generateBlueprint)(block.code, block.label, narration, cfg.apiKey);
+                this.blueprintCache.set(blockIndex, blueprint);
+                this.log(`[video] block ${blockIndex}: blueprint done (${blueprint.scenes.length} scenes) — rendering...`);
+                const result = await (0, videoRenderer_1.renderBlockVideo)({
+                    wsRoot,
+                    fileName: `${filePath.replace(/[^a-zA-Z0-9]/g, '_')}_block${blockIndex}`,
+                    blueprint,
+                    onProgress: (pct) => {
+                        if (pct % 25 === 0) {
+                            this.log(`[video] block ${blockIndex}: render ${pct}%`);
+                            panel?.postMessage({ type: 'video-render-progress', blockIndex, pct });
+                        }
+                    },
+                });
+                this.log(`[video] block ${blockIndex}: render done → ${result.mp4Path}`);
+                panel?.postMessage({ type: 'set-video-src', blockIndex, path: result.mp4Path });
+                return result.mp4Path;
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.log(`[video] block ${blockIndex}: ERROR — ${msg}`);
+                return '';
+            }
+        })();
+        this.videoCacheMap.set(blockIndex, promise);
+    }
     async fetchAudio(i) {
         const { label, code } = this.blocks[i];
         const tag = `[${i + 1}/${this.blocks.length}] ${label}`;
@@ -363,10 +421,24 @@ class WalkthroughSession {
     async presentBlock(i) {
         const block = this.blocks[i];
         const tag = `[${i + 1}/${this.blocks.length}] ${block.label}`;
+        // New block starting — reset video to frame 0
+        this.panel?.postMessage({ type: 'video-reset' });
+        // Show video for this block if it already finished rendering
+        const videoPromise = this.videoCacheMap.get(i);
+        if (videoPromise) {
+            videoPromise.then((mp4Path) => {
+                if (mp4Path) {
+                    this.panel?.postMessage({ type: 'set-video-src', blockIndex: i, path: mp4Path });
+                }
+            });
+        }
         this.kickPrefetch(i + 1);
+        this.prefetchVideo(i + 1);
         this.setStatus(`$(sync~spin) ${tag}`);
         this.showSubtitle?.("⏳  Preparing narration...", true);
         const audio = await this.prefetchCache.get(i);
+        // Narration is now cached — kick off video render for this block
+        this.prefetchVideo(i);
         if (this.stopped)
             return "next";
         const narration = this.narrationCache.get(i) ?? "";
@@ -663,6 +735,8 @@ class WalkthroughSession {
         this.qaDecorationType.dispose();
         this.clearStatus();
         this.hideSubtitle?.();
+        this.videoCacheMap.clear();
+        this.blueprintCache.clear();
     }
 }
 exports.WalkthroughSession = WalkthroughSession;

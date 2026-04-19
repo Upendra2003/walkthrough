@@ -2,6 +2,10 @@ import * as vscode from "vscode";
 import { SemanticBlock } from "./parser";
 import { fetchNarration, generateAudio, queryCodebase, fetchDeepDiveNarrations } from "./narrate";
 import { AudioPlayer } from "./audioPlayer";
+import { renderBlockVideo, clearVideoCache } from "./videoRenderer";
+import { generateBlueprint } from "./generateBlueprint";
+import type { AnimationBlueprint } from "./blueprintTypes";
+import { WalkthroughConfig } from "./config";
 
 type Direction = "next" | "prev";
 
@@ -42,6 +46,10 @@ const PLAYER_STARTUP_MS_QA: number =
   process.platform === "win32"   ? 907 :
   process.platform === "darwin"  ?  80 : 0;
 
+interface VideoPanel {
+  postMessage(msg: unknown): void;
+}
+
 // ---------------------------------------------------------------------------
 // WalkthroughSession
 // ---------------------------------------------------------------------------
@@ -75,6 +83,14 @@ export class WalkthroughSession {
   private readonly prefetchCache  = new Map<number, Promise<Buffer | null>>();
   private readonly narrationCache = new Map<number, string>();
 
+  // ── Video render cache ────────────────────────────────────────────────────
+  private videoCacheMap  = new Map<number, Promise<string>>();
+  private blueprintCache = new Map<number, AnimationBlueprint>();
+  private wsRoot?:   string;
+  private filePath?: string;
+  private panel?:    VideoPanel;
+  private cfg?:      WalkthroughConfig;
+
   // ── Subtitle animation handle ─────────────────────────────────────────────
   private subtitleStopFn:     (() => number) | null = null;
   private subtitleResumeIndex = 0;
@@ -102,8 +118,19 @@ export class WalkthroughSession {
     private readonly editor: vscode.TextEditor,
     private readonly blocks: SemanticBlock[],
     private readonly fileContext: string | null,
-    callbacks: SessionCallbacks
+    callbacks: SessionCallbacks,
+    videoOpts?: {
+      wsRoot:   string;
+      filePath: string;
+      panel:    VideoPanel;
+      cfg:      WalkthroughConfig;
+    }
   ) {
+    this.wsRoot   = videoOpts?.wsRoot;
+    this.filePath = videoOpts?.filePath;
+    this.panel    = videoOpts?.panel;
+    this.cfg      = videoOpts?.cfg;
+
     this.log                 = callbacks.log;
     this.setStatus           = callbacks.setStatus;
     this.clearStatus         = callbacks.clearStatus;
@@ -139,6 +166,7 @@ export class WalkthroughSession {
   async run(): Promise<"done" | "file-skipped" | "stopped"> {
     this.log(`\n── Starting walkthrough — whole-file narration (press D for block-by-block) ──`);
     this.kickPrefetch(0);
+    this.prefetchVideo(0);
 
     // Phase 1: narrate the whole file as a single overview block
     await this.presentBlock(0);
@@ -377,6 +405,64 @@ export class WalkthroughSession {
     this.prefetchCache.set(i, this.fetchAudio(i));
   }
 
+  private prefetchVideo(blockIndex: number): void {
+    if (!this.wsRoot || !this.filePath || !this.cfg) {
+      this.log(`[video] block ${blockIndex}: skipped — videoOpts not provided`);
+      return;
+    }
+    if (this.videoCacheMap.has(blockIndex)) return;
+    if (blockIndex >= this.blocks.length) return;
+
+    const block     = this.blocks[blockIndex];
+    const narration = this.narrationCache.get(blockIndex) ?? '';
+    if (!narration) {
+      this.log(`[video] block ${blockIndex}: skipped — narration not cached yet`);
+      return;
+    }
+
+    const wsRoot   = this.wsRoot;
+    const filePath = this.filePath;
+    const cfg      = this.cfg;
+    const panel    = this.panel;
+
+    this.log(`[video] block ${blockIndex} (${block.label}): generating blueprint...`);
+
+    const promise = (async (): Promise<string> => {
+      try {
+        const blueprint = await generateBlueprint(
+          block.code,
+          block.label,
+          narration,
+          ''
+        );
+        this.blueprintCache.set(blockIndex, blueprint);
+        this.log(`[video] block ${blockIndex}: blueprint done (${blueprint.scenes.length} scenes) — rendering...`);
+
+        const result = await renderBlockVideo({
+          wsRoot,
+          fileName: `${filePath.replace(/[^a-zA-Z0-9]/g, '_')}_block${blockIndex}`,
+          blueprint,
+          onProgress: (pct) => {
+            if (pct % 25 === 0) {
+              this.log(`[video] block ${blockIndex}: render ${pct}%`);
+              panel?.postMessage({ type: 'video-render-progress', blockIndex, pct });
+            }
+          },
+        });
+
+        this.log(`[video] block ${blockIndex}: render done → ${result.mp4Path}`);
+        panel?.postMessage({ type: 'set-video-src', blockIndex, path: result.mp4Path });
+        return result.mp4Path;
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.log(`[video] block ${blockIndex}: ERROR — ${msg}`);
+        return '';
+      }
+    })();
+
+    this.videoCacheMap.set(blockIndex, promise);
+  }
+
   private async fetchAudio(i: number): Promise<Buffer | null> {
     const { label, code } = this.blocks[i];
     const tag = `[${i + 1}/${this.blocks.length}] ${label}`;
@@ -405,12 +491,31 @@ export class WalkthroughSession {
     const block = this.blocks[i];
     const tag   = `[${i + 1}/${this.blocks.length}] ${block.label}`;
 
+    // New block starting — reset video to frame 0
+    this.panel?.postMessage({ type: 'video-reset' });
+
     this.kickPrefetch(i + 1);
+    this.prefetchVideo(i + 1);
 
     this.setStatus(`$(sync~spin) ${tag}`);
     this.showSubtitle?.("⏳  Preparing narration...", true);
 
     const audio = await this.prefetchCache.get(i)!;
+
+    // Narration is now cached — ensure video render is started for this block
+    this.prefetchVideo(i);
+
+    if (this.stopped) return "next";
+
+    // Wait for video render before playing — keeps audio/video in sync
+    const videoPromise = this.videoCacheMap.get(i);
+    if (videoPromise) {
+      this.showSubtitle?.("🎬  Rendering animation...", true);
+      const mp4Path = await videoPromise;
+      if (mp4Path && !this.stopped) {
+        this.panel?.postMessage({ type: 'set-video-src', blockIndex: i, path: mp4Path });
+      }
+    }
 
     if (this.stopped) return "next";
 
@@ -749,6 +854,8 @@ export class WalkthroughSession {
     this.qaDecorationType.dispose();
     this.clearStatus();
     this.hideSubtitle?.();
+    this.videoCacheMap.clear();
+    this.blueprintCache.clear();
   }
 }
 

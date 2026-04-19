@@ -1,14 +1,14 @@
 import * as path from 'path';
 import * as fs from 'fs';
-import { AnimationBlueprint } from '../motion/src/types';
+import type { AnimationBlueprint } from './blueprintTypes';
 
 // Cache the bundle URL across renders — only bundle once per session
 let bundleCache: string | null = null;
 let bundlePromise: Promise<string> | null = null;
 
 function getMotionRoot(): string {
-  // motion/ is a sibling of src/ at the project root
-  return path.resolve(__dirname, '../../motion');
+  // __dirname at runtime = Walkthrough/out/ → one level up reaches project root
+  return path.resolve(__dirname, '../motion');
 }
 
 async function getBundleUrl(): Promise<string> {
