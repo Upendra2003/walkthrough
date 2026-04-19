@@ -7,7 +7,7 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 | File | Role |
 |---|---|
 | `src/extension.ts` | `activate()` — commands, status-bar info item, indexing gate, multi-file orchestrator |
-| `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order |
+| `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order; `detectMainFile(wsRoot)` → entry-point auto-detection (TS: `package.json` "main" → `src/index.ts` → `index.ts` → `src/main.ts` → `main.ts`; Python: named candidates → `if __name__ == "__main__"` scan → active editor) |
 | `src/graphPanel.ts` | Unified right panel (WebviewPanel) — file tree (top, scrollable) + subtitle zone (middle, fixed 88px, no lang tag) + progress line (3px, pure `#FF0000`) + video controls (bottom). Messages: `update`, `subtitle` (with `intervalMs`), `subtitle-loading`, `subtitle-hide`, `subtitle-language`, `set-paused`. Receives: `navigate`, `control` (`prev\|pause\|next\|deep-dive\|ask\|skip-file\|stop\|vol-<0-100>\|lang-<code>`). |
 | `src/parser.ts` | `parseBlocks(source, langId)` — tree-sitter for TS + Python; returns `SemanticBlock[]` |
 | `src/narrate.ts` | `fetchNarration` (LLM), `generateAudio` (Sarvam TTS), `queryCodebase` (Qdrant RAG with `onProgress` callback), `fetchDeepDiveNarrations` |
@@ -20,7 +20,7 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 ## Key flows
 
-**Multi-file walkthrough:** `explain` → check config → model picker → indexing gate → `buildImportGraph` → `GraphPanel` → DFS queue → per-file `WalkthroughSession`. F=skip file, Esc=stop all.
+**Multi-file walkthrough:** `explain` → check config → model picker → indexing gate → `detectMainFile(wsRoot)` → `buildImportGraph` → `GraphPanel` → DFS queue → per-file `WalkthroughSession`. F=skip file, Esc=stop all.
 
 **Indexing gate (every session start):**
 1. `needsIndexing(wsRoot, cfg)` — sync, reads `.vscode/walkthrough-vector-cache.json`, hashes all `.ts`/`.py` files. Zero network calls.

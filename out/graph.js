@@ -16,8 +16,10 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.buildImportGraph = buildImportGraph;
 exports.flattenDFS = flattenDFS;
+exports.detectMainFile = detectMainFile;
 const path = require("path");
 const fs = require("fs");
+const vscode = require("vscode");
 // ── Constants ─────────────────────────────────────────────────────────────────
 /** Only files with these extensions enter the graph. */
 const EXPLAINABLE = new Set([".py", ".ts", ".tsx"]);
@@ -94,6 +96,91 @@ function flattenDFS(graph) {
     }
     dfs(graph.root);
     return result;
+}
+/**
+ * Detect the project's main entry-point file.
+ *
+ * Language is inferred by counting .ts vs .py files (package.json presence
+ * gives TypeScript the tiebreaker).
+ *
+ * TypeScript order: package.json "main" → src/index.ts → index.ts →
+ *   src/main.ts → main.ts → active editor.
+ * Python order: main.py → app.py → server.py → run.py → wsgi.py →
+ *   manage.py → first .py file with `if __name__ == "__main__"` → active editor.
+ */
+async function detectMainFile(wsRoot) {
+    const hasRoot = wsRoot.length > 0;
+    const hasPackageJson = hasRoot && fs.existsSync(path.join(wsRoot, "package.json"));
+    const tsFiles = hasRoot ? collectFilesByExt(wsRoot, ".ts") : [];
+    const pyFiles = hasRoot ? collectFilesByExt(wsRoot, ".py") : [];
+    const isTypeScript = hasPackageJson || tsFiles.length >= pyFiles.length;
+    if (isTypeScript && hasRoot) {
+        // 1. package.json "main" → resolve to absolute path
+        if (hasPackageJson) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(path.join(wsRoot, "package.json"), "utf8"));
+                if (typeof pkg.main === "string") {
+                    const base = path.resolve(wsRoot, pkg.main);
+                    const stem = path.basename(pkg.main, path.extname(pkg.main));
+                    for (const c of [
+                        base,
+                        base + ".ts",
+                        base.replace(/\.js$/, ".ts"),
+                        path.join(wsRoot, "src", stem + ".ts"), // out/extension.js → src/extension.ts
+                        path.join(wsRoot, stem + ".ts"),
+                    ]) {
+                        if (fs.existsSync(c))
+                            return c;
+                    }
+                }
+            }
+            catch { /* malformed package.json */ }
+        }
+        // 2. Fallback candidates
+        for (const rel of ["src/index.ts", "index.ts", "src/main.ts", "main.ts"]) {
+            const full = path.join(wsRoot, rel);
+            if (fs.existsSync(full))
+                return full;
+        }
+    }
+    else if (hasRoot) {
+        // 1. Named Python candidates
+        for (const rel of ["main.py", "app.py", "server.py", "run.py", "wsgi.py", "manage.py"]) {
+            const full = path.join(wsRoot, rel);
+            if (fs.existsSync(full))
+                return full;
+        }
+        // 2. Scan all .py files for if __name__ == "__main__"
+        for (const file of pyFiles) {
+            try {
+                const src = fs.readFileSync(file, "utf8");
+                if (src.includes('if __name__ == "__main__"') || src.includes("if __name__ == '__main__'")) {
+                    return file;
+                }
+            }
+            catch { /* unreadable */ }
+        }
+    }
+    // Final fallback: active editor
+    return vscode.window.activeTextEditor?.document.uri.fsPath ?? "";
+}
+// ── File collector (used by detectMainFile) ───────────────────────────────────
+/** Recursively collect all files with the given extension, honouring SKIP_DIRS. */
+function collectFilesByExt(dir, ext) {
+    const results = [];
+    try {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (entry.name.startsWith(".") || SKIP_DIRS.has(entry.name))
+                continue;
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory())
+                results.push(...collectFilesByExt(full, ext));
+            else if (path.extname(entry.name).toLowerCase() === ext)
+                results.push(full);
+        }
+    }
+    catch { /* unreadable directory */ }
+    return results;
 }
 // ── Workspace scanner ─────────────────────────────────────────────────────────
 /**

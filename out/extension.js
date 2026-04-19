@@ -603,24 +603,18 @@ function activate(context) {
         setRunning(true);
         multiFileStop = false;
         try {
-            const editor = vscode.window.activeTextEditor;
-            if (editor && SUPPORTED_LANGUAGES.has(editor.document.languageId)) {
-                await runMultiFileWalkthrough(context, editor.document.uri, undefined);
-                return;
-            }
-            log("[detect] No supported file open — scanning workspace for root file...");
-            const found = await findRootFile();
-            if (!found) {
-                log("[detect] No root file found.");
-                vscode.window.showWarningMessage("Walkthrough: No supported file open and no known entry point found. " +
+            const mainFile = await (0, graph_1.detectMainFile)(wsRoot ?? "");
+            if (!mainFile) {
+                log("[detect] No entry point detected.");
+                vscode.window.showWarningMessage("Walkthrough: Could not detect an entry point. " +
                     "Open app.py / main.py / index.ts and try again.");
                 return;
             }
-            vscode.window.showInformationMessage(`Walkthrough: Detected entry point — ${path.basename(found.uri.fsPath)} (${found.label})`);
-            const doc = await vscode.workspace.openTextDocument(found.uri);
-            const editor2 = await vscode.window.showTextDocument(doc);
-            void editor2;
-            await runMultiFileWalkthrough(context, found.uri, found.label);
+            log(`🎯 Entry point detected: ${path.basename(mainFile)}`);
+            const mainUri = vscode.Uri.file(mainFile);
+            const doc = await vscode.workspace.openTextDocument(mainUri);
+            await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+            await runMultiFileWalkthrough(context, mainUri, undefined);
         }
         finally {
             setRunning(false);
