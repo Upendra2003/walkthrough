@@ -18,7 +18,7 @@
         "title": "Walkthrough: Explain File",
         "icon": {
           "light": "./assets/play-button.png",
-          "dark":  "./assets/play-button.png"
+          "dark": "./assets/play-button.png"
         }
       },
       {
@@ -141,7 +141,12 @@
       "properties": {
         "walkthrough.provider": {
           "type": "string",
-          "enum": ["groq", "openai", "anthropic", "custom"],
+          "enum": [
+            "groq",
+            "openai",
+            "anthropic",
+            "custom"
+          ],
           "enumDescriptions": [
             "Groq — free, fast, open-source models (Llama, Qwen, Mixtral)",
             "OpenAI — GPT-4o, GPT-4o Mini, GPT-4 Turbo",
@@ -163,7 +168,9 @@
         },
         "walkthrough.embeddingProvider": {
           "type": "string",
-          "enum": ["local"],
+          "enum": [
+            "local"
+          ],
           "enumDescriptions": [
             "Local — all-MiniLM-L6-v2 via sentence-transformers (384 dims, no API key needed)"
           ],
@@ -185,6 +192,8 @@
     "typescript": "^5.3.0"
   },
   "dependencies": {
+    "@remotion/bundler": "^4.0.448",
+    "@remotion/renderer": "^4.0.448",
     "tree-sitter": "^0.21.1",
     "tree-sitter-python": "^0.21.0",
     "tree-sitter-typescript": "^0.21.2"

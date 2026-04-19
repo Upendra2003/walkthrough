@@ -1,0 +1,109 @@
+"use strict";
+/**
+ * ConfigManager — stores LLM provider/model/key in VS Code SecretStorage
+ * and non-sensitive settings in VS Code workspace configuration.
+ *
+ * Sarvam API key is also managed here (SecretStorage), but the .env file
+ * SARVAM_API_KEY remains supported as a developer fallback.
+ */
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
+Object.defineProperty(exports, "__esModule", { value: true });
+exports.ConfigManager = exports.ANTHROPIC_MODELS = exports.OPENAI_MODELS = exports.GROQ_MODELS = void 0;
+const vscode = __importStar(require("vscode"));
+exports.GROQ_MODELS = [
+    { id: "qwen/qwen3-32b", label: "Qwen3 32B — Recommended" },
+    { id: "llama-3.3-70b-versatile", label: "Llama 3.3 70B Versatile" },
+    { id: "llama-3.1-8b-instant", label: "Llama 3.1 8B Instant — Fastest" },
+    { id: "deepseek-r1-distill-llama-70b", label: "DeepSeek R1 Distill 70B" },
+    { id: "mixtral-8x7b-32768", label: "Mixtral 8x7B 32K" },
+    { id: "gemma2-9b-it", label: "Gemma 2 9B" },
+    { id: "llama3-70b-8192", label: "Llama 3 70B" },
+    { id: "llama3-8b-8192", label: "Llama 3 8B" },
+];
+exports.OPENAI_MODELS = [
+    { id: "gpt-4o", label: "GPT-4o" },
+    { id: "gpt-4o-mini", label: "GPT-4o Mini — Fast" },
+    { id: "gpt-4-turbo", label: "GPT-4 Turbo" },
+    { id: "o1-mini", label: "o1 Mini — Reasoning" },
+];
+exports.ANTHROPIC_MODELS = [
+    { id: "claude-opus-4-6", label: "Claude Opus 4.6 — Most capable" },
+    { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6 — Recommended" },
+    { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — Fastest" },
+];
+// ── Secret + setting keys ─────────────────────────────────────────────────────
+const S_LLM_KEY = "walkthrough.llmApiKey";
+const S_SARVAM_KEY = "walkthrough.sarvamApiKey";
+const CFG_PROVIDER = "walkthrough.provider";
+const CFG_MODEL = "walkthrough.model";
+const CFG_CUSTOM = "walkthrough.customBaseUrl";
+// ── Manager ───────────────────────────────────────────────────────────────────
+class ConfigManager {
+    constructor(secrets) {
+        this.secrets = secrets;
+    }
+    async getConfig() {
+        const cfg = vscode.workspace.getConfiguration();
+        const apiKey = (await this.secrets.get(S_LLM_KEY)) ?? process.env.GROQ_API_KEY ?? "";
+        const sarvamKey = (await this.secrets.get(S_SARVAM_KEY)) ?? process.env.SARVAM_API_KEY ?? "";
+        const provider = cfg.get(CFG_PROVIDER, "groq");
+        const model = cfg.get(CFG_MODEL, "qwen/qwen3-32b");
+        const customBase = cfg.get(CFG_CUSTOM, "");
+        return {
+            provider, model, apiKey, sarvamApiKey: sarvamKey,
+            customBaseUrl: customBase,
+            embeddingProvider: "local",
+        };
+    }
+    async saveConfig(config) {
+        await this.secrets.store(S_LLM_KEY, config.apiKey);
+        await this.secrets.store(S_SARVAM_KEY, config.sarvamApiKey);
+        const cfg = vscode.workspace.getConfiguration();
+        await cfg.update(CFG_PROVIDER, config.provider, vscode.ConfigurationTarget.Global);
+        await cfg.update(CFG_MODEL, config.model, vscode.ConfigurationTarget.Global);
+        await cfg.update(CFG_CUSTOM, config.customBaseUrl, vscode.ConfigurationTarget.Global);
+    }
+    /**
+     * Returns true if both an LLM key and a Sarvam key are available
+     * (either via SecretStorage or .env fallback).
+     */
+    async isConfigured() {
+        const llm = (await this.secrets.get(S_LLM_KEY)) ?? process.env.GROQ_API_KEY;
+        const sarvam = (await this.secrets.get(S_SARVAM_KEY)) ?? process.env.SARVAM_API_KEY;
+        return !!(llm?.trim() && sarvam?.trim());
+    }
+}
+exports.ConfigManager = ConfigManager;
+//# sourceMappingURL=config.js.map
