@@ -37,6 +37,13 @@ class WalkthroughSession {
         // ── Deep Dive ──────────────────────────────────────────────────────────────
         this.deepDiveActive = false;
         this.pendingDeepDive = false;
+        // ── Q&A answer playback ───────────────────────────────────────────────────
+        // Separate pause state so Space controls Q&A audio while narration waits.
+        this.qaAnswerActive = false;
+        this.qaAnswerPaused = false;
+        this.qaAnswerResolveFn = null;
+        this.qaAudioResumeMs = 0;
+        this.qaSubtitleIdx = 0;
         // ── Prefetch / narration cache ────────────────────────────────────────────
         this.prefetchCache = new Map();
         this.narrationCache = new Map();
@@ -96,10 +103,28 @@ class WalkthroughSession {
     togglePause() {
         if (this.stopped)
             return;
+        // While Q&A answer is speaking, Space controls the Q&A audio — not narration.
+        if (this.qaAnswerActive) {
+            this.qaAnswerPaused = !this.qaAnswerPaused;
+            if (this.qaAnswerPaused) {
+                this.log("  ⏸  Q&A paused");
+                this.qaAudioResumeMs += this.currentPlayer?.elapsedMs ?? 0;
+                this.currentPlayer?.stop();
+                this.qaSubtitleIdx = this.cancelSubtitleAnimation();
+                this.setPaused?.(true);
+            }
+            else {
+                this.log("  ▶  Q&A resumed");
+                this.setPaused?.(false);
+                const r = this.qaAnswerResolveFn;
+                this.qaAnswerResolveFn = null;
+                r?.();
+            }
+            return;
+        }
         this.paused = !this.paused;
         if (this.paused) {
             this.log("  ⏸  Paused");
-            // Capture elapsed BEFORE stop() so we know exactly where the audio was.
             this.audioResumeMs += this.currentPlayer?.elapsedMs ?? 0;
             this.currentPlayer?.stop();
             this.subtitleResumeIndex = this.cancelSubtitleAnimation();
@@ -180,22 +205,48 @@ class WalkthroughSession {
                 this.editor.setDecorations(this.qaDecorationType, [range]);
                 this.editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
             }
-            // Speak the answer — generate audio first so we can derive word timing,
-            // then delay subtitle start to match player startup latency.
+            // Speak the answer — generate audio first, then play with full
+            // pause/resume support independent of the narration pause state.
             this.setStatus("$(megaphone) Q&A — speaking answer...");
             try {
                 const audio = await (0, narrate_1.generateAudio)(answer);
                 if (!this.stopped) {
                     const qaWords = answer.trim().split(/\s+/).filter(Boolean);
                     const qaIntervalMs = this.estimateWordIntervalMs(audio, qaWords.length);
-                    const player = new audioPlayer_1.AudioPlayer();
-                    this.currentPlayer = player;
-                    const audioPromise = player.play(audio);
-                    await new Promise(r => setTimeout(r, PLAYER_STARTUP_MS_QA));
-                    if (!this.stopped)
-                        this.startSubtitleAnimation(answer, 0, qaIntervalMs);
-                    await audioPromise;
-                    this.currentPlayer = null;
+                    // Enter Q&A playback mode — Space now controls Q&A, not narration.
+                    this.qaAnswerActive = true;
+                    this.qaAnswerPaused = false;
+                    this.qaAudioResumeMs = 0;
+                    this.qaSubtitleIdx = 0;
+                    this.setPaused?.(false); // show ⏸ (playing) during Q&A answer
+                    try {
+                        for (;;) {
+                            if (this.qaAnswerPaused) {
+                                await new Promise(r => { this.qaAnswerResolveFn = r; });
+                            }
+                            if (this.stopped)
+                                break;
+                            const player = new audioPlayer_1.AudioPlayer();
+                            this.currentPlayer = player;
+                            const clip = this.qaAudioResumeMs > 0
+                                ? trimWav(audio, this.qaAudioResumeMs) : audio;
+                            const promise = player.play(clip);
+                            await new Promise(r => setTimeout(r, PLAYER_STARTUP_MS_QA));
+                            if (!this.stopped && !this.qaAnswerPaused) {
+                                this.startSubtitleAnimation(answer, this.qaSubtitleIdx, qaIntervalMs);
+                            }
+                            await promise;
+                            this.currentPlayer = null;
+                            if (this.qaAnswerPaused)
+                                continue; // paused mid-play → loop back
+                            break; // finished naturally
+                        }
+                    }
+                    finally {
+                        this.qaAnswerActive = false;
+                        this.cancelSubtitleAnimation();
+                        this.hideSubtitle?.();
+                    }
                 }
             }
             catch (ttsErr) {
@@ -203,12 +254,23 @@ class WalkthroughSession {
                 this.log(`[Q&A] TTS error: ${msg}`);
                 this.showSubtitle?.(answer);
                 await new Promise(r => setTimeout(r, 4000));
-            }
-            finally {
-                this.cancelSubtitleAnimation();
                 this.hideSubtitle?.();
             }
-            this.setStatus("$(comment-discussion) Q&A done — Space to resume");
+            // Auto-resume narration when Q&A finishes (if it was playing before Q was pressed).
+            if (!this.stopped) {
+                if (!wasPaused) {
+                    this.log("  ▶  Narration auto-resumed after Q&A");
+                    this.paused = false;
+                    this.setPaused?.(false);
+                    this.editor.setDecorations(this.qaDecorationType, []);
+                    const r = this.resumeResolve;
+                    this.resumeResolve = null;
+                    r?.();
+                }
+                else {
+                    this.setStatus("$(comment-discussion) Q&A done — Space to resume");
+                }
+            }
         }
         catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
