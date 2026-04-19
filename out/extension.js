@@ -253,7 +253,9 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
         try {
             log(`\n[parse] ${node.relativePath} (${node.language})`);
             blocks = (0, parser_1.parseBlocks)(editor.document.getText(), node.language);
-            log(`[parse] ${blocks.length} block(s)`);
+            const allCount = blocks.length;
+            blocks = (0, parser_1.filterImportantBlocks)(blocks);
+            log(`⚡ Filtered ${allCount} blocks → ${blocks.length} important blocks remain`);
             blocks.forEach((b, i) => log(`  [${i + 1}] ${b.label}  (lines ${b.startLine + 1}–${b.endLine + 1})`));
         }
         catch (e) {
@@ -315,7 +317,9 @@ async function runSingleFile(editor, fileContext) {
     try {
         log("[parse] Parsing...");
         blocks = (0, parser_1.parseBlocks)(editor.document.getText(), languageId);
-        log(`[parse] ${blocks.length} block(s)`);
+        const allCount = blocks.length;
+        blocks = (0, parser_1.filterImportantBlocks)(blocks);
+        log(`⚡ Filtered ${allCount} blocks → ${blocks.length} important blocks remain`);
         blocks.forEach((b, i) => log(`  [${i + 1}] ${b.label}  (lines ${b.startLine + 1}–${b.endLine + 1})`));
     }
     catch (err) {

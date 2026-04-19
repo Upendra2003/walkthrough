@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
-import { parseBlocks } from "./parser";
+import { parseBlocks, filterImportantBlocks } from "./parser";
 import { buildImportGraph, flattenDFS, ImportGraph, detectMainFile } from "./graph";
 import { GraphPanel } from "./graphPanel";
 import { WalkthroughSession, SessionCallbacks } from "./session";
@@ -277,7 +277,9 @@ async function runMultiFileWalkthrough(
     try {
       log(`\n[parse] ${node.relativePath} (${node.language})`);
       blocks = parseBlocks(editor.document.getText(), node.language);
-      log(`[parse] ${blocks.length} block(s)`);
+      const allCount = blocks.length;
+      blocks = filterImportantBlocks(blocks);
+      log(`⚡ Filtered ${allCount} blocks → ${blocks.length} important blocks remain`);
       blocks.forEach((b, i) =>
         log(`  [${i + 1}] ${b.label}  (lines ${b.startLine + 1}–${b.endLine + 1})`)
       );
@@ -352,7 +354,9 @@ async function runSingleFile(
   try {
     log("[parse] Parsing...");
     blocks = parseBlocks(editor.document.getText(), languageId);
-    log(`[parse] ${blocks.length} block(s)`);
+    const allCount = blocks.length;
+    blocks = filterImportantBlocks(blocks);
+    log(`⚡ Filtered ${allCount} blocks → ${blocks.length} important blocks remain`);
     blocks.forEach((b, i) =>
       log(`  [${i + 1}] ${b.label}  (lines ${b.startLine + 1}–${b.endLine + 1})`)
     );

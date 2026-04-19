@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.parseBlocks = parseBlocks;
+exports.filterImportantBlocks = filterImportantBlocks;
 const Parser = require("tree-sitter");
 /**
  * Parse a TypeScript or Python source string into semantic blocks using tree-sitter.
@@ -321,6 +322,70 @@ function extractPyClassMethods(classNode, lines, className) {
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Block filtering
+// ---------------------------------------------------------------------------
+/**
+ * Filters parsed blocks down to those worth narrating, setting `isImportant`
+ * on every kept block. Trivial import groups, comment-only blocks, bare
+ * interface/type declarations, single-line config constants, and no-op Python
+ * __init__ / docstring-only methods are discarded.
+ */
+function filterImportantBlocks(blocks) {
+    const result = [];
+    for (const block of blocks) {
+        if (isBlockImportant(block))
+            result.push({ ...block, isImportant: true });
+    }
+    return result;
+}
+function isBlockImportant(block) {
+    const { label, code, level } = block;
+    const trimmedLines = code.split('\n').map(l => l.trim()).filter(Boolean);
+    // ── Always keep ────────────────────────────────────────────────────────────
+    if (level === 0)
+        return true; // File Overview
+    if (label.startsWith('Class:'))
+        return true; // class declarations
+    if (/\bawait\b|\basync\b|\btry[\s{(]|\bcatch\b|\bthrow\b|\braise\b|\bexcept[\s:]/.test(code))
+        return true;
+    if (/if\s+__name__\s*==\s*["']__main__["']/.test(code))
+        return true; // Python main guard
+    // ── Remove: import groups ──────────────────────────────────────────────────
+    if (label.startsWith('Imports'))
+        return false;
+    if (trimmedLines.length > 0 && trimmedLines.every(l => /^(import\s+|from\s+\S+\s+import)/.test(l)))
+        return false;
+    // ── Remove: comment-only blocks ────────────────────────────────────────────
+    const isCommentLine = (l) => l.startsWith('//') || l.startsWith('#') || l.startsWith('/*') || l.startsWith('*') || l === '*/';
+    if (trimmedLines.length > 0 && trimmedLines.every(isCommentLine))
+        return false;
+    // ── Remove: TS interface / type alias declarations ─────────────────────────
+    if (/^(export\s+)?(interface|type)\s+\w+[\s{<]/.test(code.trimStart()))
+        return false;
+    // ── Remove: TS single-line config constant (const FOO = "bar") ───────────
+    if (code.split('\n').filter(l => l.trim()).length === 1) {
+        if (/^(export\s+)?(const|let|var)\s+\w+(\s*:\s*[\w<>\[\]|&]+)?\s*=\s*["'`\-\d]/.test(code.trim())) {
+            return false;
+        }
+    }
+    // ── Remove: Python trivial __init__ (only pass / super().__init__()) ───────
+    if (label.includes('.__init__')) {
+        const body = trimmedLines.filter(l => !l.startsWith('def ') && !l.startsWith('@'));
+        if (body.length > 0 && body.every(l => l === 'pass' || /^super\(\)\.__init__/.test(l) || isCommentLine(l)))
+            return false;
+    }
+    // ── Remove: Python function / method that is only a docstring ─────────────
+    if (label.startsWith('Function:') || label.startsWith('Method:')) {
+        const body = trimmedLines.filter(l => !l.startsWith('def ') && !l.startsWith('@'));
+        const isDocstringOnly = body.every(l => l.startsWith('"""') || l.endsWith('"""') || l === '"""' ||
+            l.startsWith("'''") || l.endsWith("'''") || l === "'''" ||
+            l === 'pass' || isCommentLine(l));
+        if (isDocstringOnly && body.length > 0)
+            return false;
+    }
+    return true;
+}
 /** Merge adjacent / overlapping line ranges into contiguous spans. */
 function mergeRanges(ranges) {
     if (ranges.length === 0)

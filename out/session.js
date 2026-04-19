@@ -29,6 +29,7 @@ class WalkthroughSession {
         this.stopped = false;
         this.paused = false;
         this.fileSkipRequested = false;
+        this.inBlockMode = false; // set to true when D is pressed during file overview
         // ── Control signals ────────────────────────────────────────────────────────
         this.skipResolve = null;
         this.pendingSkip = null;
@@ -82,15 +83,23 @@ class WalkthroughSession {
     }
     // ── Public API ────────────────────────────────────────────────────────────
     async run() {
-        this.log(`\n── Starting walkthrough (${this.blocks.length} blocks) ──`);
+        this.log(`\n── Starting walkthrough — whole-file narration (press D for block-by-block) ──`);
         this.kickPrefetch(0);
-        while (!this.stopped && this.index < this.blocks.length) {
-            const dir = await this.presentBlock(this.index);
-            if (this.stopped)
-                break;
-            this.index = dir === "prev"
-                ? Math.max(0, this.index - 1)
-                : this.index + 1;
+        // Phase 1: narrate the whole file as a single overview block
+        await this.presentBlock(0);
+        // Phase 2: if D was pressed during the overview, go block-by-block through functions
+        if (!this.stopped && !this.fileSkipRequested && this.inBlockMode && this.blocks.length > 1) {
+            this.log(`── Block-by-block mode (${this.blocks.length - 1} function block(s)) ──`);
+            this.index = 1;
+            this.kickPrefetch(1);
+            while (!this.stopped && !this.fileSkipRequested && this.index < this.blocks.length) {
+                const dir = await this.presentBlock(this.index);
+                if (this.stopped)
+                    break;
+                this.index = dir === "prev"
+                    ? Math.max(1, this.index - 1)
+                    : this.index + 1;
+            }
         }
         this.cleanup();
         this.log("── Walkthrough ended ──");
@@ -330,6 +339,11 @@ class WalkthroughSession {
         const narration = this.narrationCache.get(i) ?? "";
         if (this.pendingDeepDive) {
             this.pendingDeepDive = false;
+            if (block.level === 0) {
+                this.inBlockMode = true;
+                this.clearSubtitle();
+                return "next";
+            }
             this.applyBlockDecoration(block);
             await this.runDeepDive(block, tag);
             this.editor.setDecorations(this.decorationType, []);
@@ -361,6 +375,11 @@ class WalkthroughSession {
         this.clearSubtitle();
         if (this.pendingDeepDive && !this.stopped) {
             this.pendingDeepDive = false;
+            if (block.level === 0) {
+                this.inBlockMode = true;
+                this.clearSubtitle();
+                return "next";
+            }
             this.applyBlockDecoration(block);
             await this.runDeepDive(block, tag);
             this.editor.setDecorations(this.decorationType, []);

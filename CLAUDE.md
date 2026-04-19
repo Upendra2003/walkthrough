@@ -7,11 +7,11 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 | File | Role |
 |---|---|
 | `src/extension.ts` | `activate()` — commands, status-bar info item, indexing gate, multi-file orchestrator |
-| `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order; `detectMainFile(wsRoot)` → entry-point auto-detection (TS: `package.json` "main" → `src/index.ts` → `index.ts` → `src/main.ts` → `main.ts`; Python: named candidates → `if __name__ == "__main__"` scan → active editor) |
+| `src/graph.ts` | `buildImportGraph(root, wsRoot)` → `ImportGraph`; `flattenDFS` for traversal order; `detectMainFile(wsRoot)` → entry-point auto-detection (TS: `package.json` "main" resolved with `src/<stem>.ts` fallback for VS Code extensions where compiled output is `out/*.js` but source is `src/*.ts` → `src/index.ts` → `index.ts` → `src/main.ts` → `main.ts`; Python: `main.py` → `app.py` → `server.py` → `run.py` → `wsgi.py` → `manage.py` → `if __name__ == "__main__"` scan → active editor) |
 | `src/graphPanel.ts` | Unified right panel (WebviewPanel) — file tree (top, scrollable) + subtitle zone (middle, fixed 88px, no lang tag) + progress line (3px, pure `#FF0000`) + video controls (bottom). Messages: `update`, `subtitle` (with `intervalMs`), `subtitle-loading`, `subtitle-hide`, `subtitle-language`, `set-paused`. Receives: `navigate`, `control` (`prev\|pause\|next\|deep-dive\|ask\|skip-file\|stop\|vol-<0-100>\|lang-<code>`). |
-| `src/parser.ts` | `parseBlocks(source, langId)` — tree-sitter for TS + Python; returns `SemanticBlock[]` |
+| `src/parser.ts` | `parseBlocks(source, langId)` — tree-sitter for TS + Python; returns `SemanticBlock[]`; `filterImportantBlocks(blocks)` — removes import groups, comment-only blocks, TS interface/type/single-line-const blocks, Python trivial `__init__` / docstring-only methods; sets `isImportant: true` on all kept blocks; always keeps level-0 overview, class declarations, blocks with async/await/try/catch/raise, and the Python `__main__` guard |
 | `src/narrate.ts` | `fetchNarration` (LLM), `generateAudio` (Sarvam TTS), `queryCodebase` (Qdrant RAG with `onProgress` callback), `fetchDeepDiveNarrations` |
-| `src/session.ts` | `WalkthroughSession` — playback loop, pause/resume (word-level + audio-trim resume), prefetch, subtitles, deep dive, Q&A (speaks answer) |
+| `src/session.ts` | `WalkthroughSession` — two-phase playback: Phase 1 narrates the whole file as one block (File Overview); Phase 2 is block-by-block through functions, entered only when D is pressed during Phase 1 (`inBlockMode = true`). Pause/resume (word-level + audio-trim resume), prefetch, subtitles, deep dive (line-by-line, only in Phase 2), Q&A (speaks answer). |
 | `src/audioPlayer.ts` | Spawns `afplay` / PowerShell `SoundPlayer` / `aplay`; `stop()` kills the process. `AudioPlayer.volume` static (0–100, default 80). `elapsedMs` getter — ms since `play()` was called, used by pause/resume to trim the WAV on the next play. |
 | `src/embedder.ts` | `embed(texts, cfg)` — local `all-MiniLM-L6-v2` (384 dims) via persistent Python subprocess (sentence-transformers). No API key needed. `disposeEmbedder()` cleans up on deactivate. |
 | `src/codebaseIndexer.ts` | `indexWorkspace` — scans workspace, embeds blocks in batches of 10, upserts into Qdrant; `needsIndexing` — sync hash-cache pre-check (no network) |
@@ -20,7 +20,7 @@ VS Code extension (TypeScript). Walks through `.ts` / `.py` files block-by-block
 
 ## Key flows
 
-**Multi-file walkthrough:** `explain` → check config → model picker → indexing gate → `detectMainFile(wsRoot)` → `buildImportGraph` → `GraphPanel` → DFS queue → per-file `WalkthroughSession`. F=skip file, Esc=stop all.
+**Multi-file walkthrough:** `explain` → check config → model picker → indexing gate → `detectMainFile(wsRoot)` → `buildImportGraph` → `GraphPanel` → DFS queue → per-file: `parseBlocks` → `filterImportantBlocks` (logs `⚡ Filtered X blocks → Y important blocks remain`) → `WalkthroughSession`. F=skip file, Esc=stop all.
 
 **Indexing gate (every session start):**
 1. `needsIndexing(wsRoot, cfg)` — sync, reads `.vscode/walkthrough-vector-cache.json`, hashes all `.ts`/`.py` files. Zero network calls.
@@ -114,6 +114,19 @@ Qdrant URL and API key are read from `process.env` directly (not stored in Secre
 - Protocol: stdin/stdout JSON lines — send `["text1","text2"]`, receive `[[...],[...]]`
 - Process stays alive for the full session; `disposeEmbedder()` closes it on deactivate
 - Requires: `pip install sentence-transformers`
+
+## Build / compile
+
+**CRITICAL**: The extension runs from `out/*.js` (compiled output), NOT from `src/*.ts`. Any change to a `.ts` source file is invisible to VS Code until compiled.
+
+```bash
+npm run compile      # one-shot compile
+npm run watch        # auto-recompile on save (recommended during dev)
+```
+
+After compiling, reload the Extension Development Host: `Ctrl+Shift+P` → **Developer: Reload Window** (or press `F5` to relaunch the host).
+
+Failing to compile is the #1 cause of "my change has no effect" bugs.
 
 ## Incremental indexing cache
 
