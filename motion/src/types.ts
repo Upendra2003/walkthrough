@@ -54,10 +54,20 @@ export interface AsyncScene {
   steps: { label: string; duration: string; isAwait: boolean }[];
 }
 
+export interface WordTiming {
+  word: string;
+  startMs: number;
+  endMs: number;
+}
+
 export interface AnimationBlueprint {
   fileTitle: string;
   blockLabel: string;
   narration: string;
   scenes: AnimationScene[];
   durationPerScene: number; // seconds
+  silent?: boolean;         // if true, no audio or subtitles baked in
+  audioPath?: string;
+  audioDurationMs?: number;
+  wordTimings?: WordTiming[];
 }

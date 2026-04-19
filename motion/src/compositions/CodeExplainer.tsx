@@ -1,6 +1,7 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate, Audio, staticFile } from 'remotion';
 import { AnimationBlueprint, AnimationScene } from '../types';
+import { SubtitleBar } from '../components/SubtitleBar';
 import { FlowDiagram } from '../components/FlowDiagram';
 import { ArrowDiagram } from '../components/ArrowDiagram';
 import { BoxDiagram } from '../components/BoxDiagram';
@@ -66,6 +67,10 @@ export const CodeExplainer: React.FC<Props> = ({ blueprint }) => {
 
   return (
     <AbsoluteFill style={{ background: '#0d1117', fontFamily: "'Segoe UI', system-ui, sans-serif" }}>
+      {!blueprint.silent && blueprint.audioPath && (
+        <Audio src={staticFile(blueprint.audioPath)} startFrom={0} volume={1} />
+      )}
+
       {/* Watermark */}
       <div style={{
         position: 'absolute', top: 12, left: 16, zIndex: 10,
@@ -83,6 +88,10 @@ export const CodeExplainer: React.FC<Props> = ({ blueprint }) => {
       }}>
         {scene ? renderScene(scene, localFrame, fps) : null}
       </div>
+
+      {!blueprint.silent && blueprint.wordTimings && blueprint.wordTimings.length > 0 && (
+        <SubtitleBar wordTimings={blueprint.wordTimings} />
+      )}
 
       {/* Bottom bar */}
       <div style={{

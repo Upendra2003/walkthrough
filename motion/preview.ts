@@ -4,6 +4,8 @@ import path from 'path';
 import { sampleBlueprint } from './src/sampleBlueprint';
 
 async function main() {
+  const blueprint = { ...sampleBlueprint, silent: true };
+
   console.log('📦 Bundling...');
   const bundled = await bundle({
     entryPoint: path.resolve(__dirname, './src/index.ts'),
@@ -14,7 +16,7 @@ async function main() {
   const composition = await selectComposition({
     serveUrl: bundled,
     id: 'CodeExplainer',
-    inputProps: { blueprint: sampleBlueprint },
+    inputProps: { blueprint },
   });
 
   const outputPath = path.resolve(__dirname, './output/sample.mp4');
@@ -24,7 +26,7 @@ async function main() {
     serveUrl: bundled,
     codec: 'h264',
     outputLocation: outputPath,
-    inputProps: { blueprint: sampleBlueprint },
+    inputProps: { blueprint },
     onProgress: ({ progress }) => {
       process.stdout.write(`\r⏳ ${Math.round(progress * 100)}%`);
     },
