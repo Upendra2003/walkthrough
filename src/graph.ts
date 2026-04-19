@@ -18,7 +18,7 @@ import * as fs   from "fs";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-export type NodeStatus = "pending" | "active" | "completed" | "skipped";
+type NodeStatus = "pending" | "active" | "completed" | "skipped";
 
 export interface FileNode {
   id:           string;      // normalised absolute path — unique key

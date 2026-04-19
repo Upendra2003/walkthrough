@@ -14,8 +14,6 @@ export const VECTOR_SIZES: Record<string, number> = {
   local: 384,
 };
 
-export type EmbeddingProvider = "local";
-
 // ── Persistent Python process ─────────────────────────────────────────────────
 
 const EMBED_SCRIPT = [

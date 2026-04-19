@@ -12,7 +12,7 @@ import * as vscode from "vscode";
 
 export type LLMProvider = "groq" | "openai" | "anthropic" | "custom";
 
-export interface ModelOption { id: string; label: string; }
+interface ModelOption { id: string; label: string; }
 
 export const GROQ_MODELS: ModelOption[] = [
   { id: "qwen/qwen3-32b",                label: "Qwen3 32B — Recommended" },

@@ -4,7 +4,11 @@
       "Bash(npm install:*)",
       "Bash(npm run:*)",
       "WebFetch(domain:docs.sarvam.ai)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(npx knip *)",
+      "Bash(npx depcheck *)",
+      "Bash(npx ts-prune *)",
+      "Bash(npx tsc *)"
     ]
   }
 }

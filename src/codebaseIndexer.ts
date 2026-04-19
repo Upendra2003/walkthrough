@@ -20,17 +20,17 @@ import { WalkthroughConfig }    from "./config";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-export interface IndexProgress {
-  message:   string;   // human-readable step description
-  increment: number;   // 0-100 progress increment for this step
+interface IndexProgress {
+  message:   string;
+  increment: number;
   current:   number;
   total:     number;
 }
 
-export interface IndexResult {
-  indexed: number;   // blocks newly embedded this run
-  skipped: number;   // blocks served from cache (files unchanged)
-  files:   number;   // total files scanned
+interface IndexResult {
+  indexed: number;
+  skipped: number;
+  files:   number;
 }
 
 interface CacheEntry { hash: string; blockCount: number; indexedAt: number; }
