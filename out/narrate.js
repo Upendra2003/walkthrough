@@ -182,12 +182,20 @@ async function fetchNarration(label, code, fileContext) {
 // ---------------------------------------------------------------------------
 // Sarvam TTS → WAV Buffer
 // ---------------------------------------------------------------------------
+const SARVAM_MAX_CHARS = 490;
+function truncateForTTS(text) {
+    if (text.length <= SARVAM_MAX_CHARS)
+        return text;
+    const cut = text.lastIndexOf(' ', SARVAM_MAX_CHARS);
+    return (cut > 0 ? text.slice(0, cut) : text.slice(0, SARVAM_MAX_CHARS)) + '…';
+}
 function generateAudio(text) {
     const cfg = getConfig();
     const key = cfg.sarvamApiKey || process.env.SARVAM_API_KEY || "";
+    const ttsText = truncateForTTS(text);
     return new Promise((resolve, reject) => {
         const body = JSON.stringify({
-            inputs: [text],
+            inputs: [ttsText],
             target_language_code: "en-IN",
             speaker: "priya",
             model: "bulbul:v3",

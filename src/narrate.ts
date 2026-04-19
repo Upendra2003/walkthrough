@@ -239,13 +239,22 @@ export async function fetchNarration(
 // Sarvam TTS → WAV Buffer
 // ---------------------------------------------------------------------------
 
+const SARVAM_MAX_CHARS = 490;
+
+function truncateForTTS(text: string): string {
+  if (text.length <= SARVAM_MAX_CHARS) return text;
+  const cut = text.lastIndexOf(' ', SARVAM_MAX_CHARS);
+  return (cut > 0 ? text.slice(0, cut) : text.slice(0, SARVAM_MAX_CHARS)) + '…';
+}
+
 export function generateAudio(text: string): Promise<Buffer> {
   const cfg = getConfig();
   const key = cfg.sarvamApiKey || process.env.SARVAM_API_KEY || "";
+  const ttsText = truncateForTTS(text);
 
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
-      inputs: [text],
+      inputs: [ttsText],
       target_language_code: "en-IN",
       speaker: "priya",
       model: "bulbul:v3",
