@@ -473,6 +473,7 @@ export class WalkthroughSession {
       const text = await fetchNarration(label, code, ctx);
       this.narrationCache.set(i, text);
       this.log(`${tag} → narration ready`);
+      this.log(`[script] ${tag}:\n${text}`);
 
       this.log(`${tag} → generating audio...`);
       const buf = await generateAudio(text);

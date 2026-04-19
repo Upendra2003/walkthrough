@@ -3,10 +3,11 @@
  * GraphPanel — unified right-panel WebviewPanel.
  *
  * Layout (flex column, 100vh):
- *   1. #graph-section    — scrollable file tree           (flex: 1)
- *   2. #subtitle-section — fixed-height subtitle zone     (88px, no lang tag)
- *   3. #progress-track   — animated read-line             (3px, pure #FF0000)
- *   4. #controls-bar     — video-player controls
+ *   1. #graph-section    — scrollable file tree           (flex: 0 0 50%)
+ *   2. #video-zone       — silent Remotion MP4            (flex: 0 0 50%, always visible, placeholder until ready, fullscreen btn)
+ *   3. #subtitle-section — fixed-height subtitle zone     (88px, no lang tag)
+ *   4. #progress-track   — animated read-line             (3px, pure #FF0000)
+ *   5. #controls-bar     — video-player controls
  *
  * Font: Source Sans 3 (Google Fonts)
  *
@@ -207,38 +208,74 @@ body {
   user-select: none;
 }
 
-/* ════ Video zone ════ */
+/* ════ Video zone — lower half of dynamic space ════ */
 #video-zone {
-  flex: 0 0 auto;
+  flex: 1 1 0;
+  min-height: 0;
   width: 100%;
-  background: #000;
-  display: none;
+  background: #0a0a0f;
+  display: flex;
   position: relative;
+  overflow: hidden;
+  border-top: 1px solid rgba(255,255,255,0.07);
 }
+#video-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: rgba(255,255,255,0.12);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  pointer-events: none;
+}
+#video-placeholder-icon { font-size: 32px; opacity: 0.18; }
 #walkthrough-video {
   width: 100%;
-  display: block;
-  max-height: 320px;
+  height: 100%;
+  display: none;
   object-fit: contain;
 }
 #video-loading {
   position: absolute;
   inset: 0;
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
-  background: #0d1117;
-  color: rgba(255,255,255,0.4);
-  font: 13px 'JetBrains Mono', monospace;
+  background: rgba(0,0,0,0.7);
+  color: rgba(255,255,255,0.5);
+  font: 12px 'JetBrains Mono', monospace;
+  letter-spacing: 0.04em;
 }
+/* Fullscreen button overlaid on top-right of video zone */
+#btn-fullscreen {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  transition: background 0.12s, color 0.12s;
+  line-height: 1;
+}
+#btn-fullscreen:hover { background: rgba(0,0,0,0.85); color: white; }
 
-/* ════ Graph section ════ */
+/* ════ Graph section — upper half of dynamic space ════ */
 #graph-section {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow-y: auto;
   padding: 16px 12px 12px;
   min-height: 0;
-  max-height: 180px;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
 #header {
@@ -587,13 +624,7 @@ body {
 </head>
 <body>
 
-<!-- ① Video zone — hidden until MP4 is ready -->
-<div id="video-zone">
-  <video id="walkthrough-video" preload="auto" muted></video>
-  <div id="video-loading">&#x23F3; Generating visuals...</div>
-</div>
-
-<!-- ② File tree -->
+<!-- ① File tree (always visible, scrollable) -->
 <div id="graph-section">
   <div id="header">
     <h2>&#x2B21; Codebase Map</h2>
@@ -608,7 +639,18 @@ body {
   </div>
 </div>
 
-<!-- ② Subtitle (no lang tag) -->
+<!-- ② Video zone — always visible, placeholder until MP4 ready -->
+<div id="video-zone">
+  <div id="video-placeholder">
+    <div id="video-placeholder-icon">&#x25B6;&#xFE0F;</div>
+    <div>animation renders here</div>
+  </div>
+  <video id="walkthrough-video" preload="auto" muted></video>
+  <div id="video-loading">&#x23F3; rendering visuals&hellip;</div>
+  <button id="btn-fullscreen" title="Fullscreen">&#x26F6;</button>
+</div>
+
+<!-- ③ Subtitle (no lang tag) -->
 <div id="subtitle-section" class="hidden">
   <div id="subtitle-inner">
     <div id="subtitle-words"></div>
@@ -616,12 +658,12 @@ body {
   </div>
 </div>
 
-<!-- ③ Progress read-line -->
+<!-- ④ Progress read-line -->
 <div id="progress-track">
   <div id="progress-fill"></div>
 </div>
 
-<!-- ④ Video-player controls -->
+<!-- ⑤ Video-player controls -->
 <div id="controls-bar">
 
   <!-- Left: prev / pause / next -->
@@ -934,13 +976,14 @@ window.addEventListener('message', function(event) {
       break;
     }
     case 'set-video-src': {
-      var videoS  = document.getElementById('walkthrough-video');
-      var zone    = document.getElementById('video-zone');
-      var loadEl  = document.getElementById('video-loading');
-      if (!videoS || !zone) break;
+      var videoS      = document.getElementById('walkthrough-video');
+      var loadEl      = document.getElementById('video-loading');
+      var placeholder = document.getElementById('video-placeholder');
+      if (!videoS) break;
       videoS.src = data.uri;
-      zone.style.display = 'block';
-      if (loadEl) loadEl.style.display = 'flex';
+      if (loadEl)      { loadEl.style.display = 'flex'; }
+      if (placeholder) { placeholder.style.display = 'none'; }
+      videoS.style.display = 'block';
       videoS.oncanplay = function() {
         if (loadEl) loadEl.style.display = 'none';
       };
@@ -948,13 +991,26 @@ window.addEventListener('message', function(event) {
       break;
     }
     case 'video-reset': {
-      var videoR = document.getElementById('walkthrough-video');
+      var videoR      = document.getElementById('walkthrough-video');
+      var placeholderR = document.getElementById('video-placeholder');
       if (videoR) {
         videoR.currentTime = 0;
+        videoR.style.display = 'block';
+        if (placeholderR) placeholderR.style.display = 'none';
         if (!isPaused) videoR.play().catch(function(){});
       }
       break;
     }
+  }
+});
+
+// ── Fullscreen ────────────────────────────────────────────────────────────────
+document.getElementById('btn-fullscreen').addEventListener('click', function() {
+  var zone = document.getElementById('video-zone');
+  if (document.fullscreenElement) {
+    document.exitFullscreen();
+  } else if (zone && zone.requestFullscreen) {
+    zone.requestFullscreen();
   }
 });
 
