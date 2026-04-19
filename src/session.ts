@@ -429,11 +429,16 @@ export class WalkthroughSession {
 
     const promise = (async (): Promise<string> => {
       try {
+        const audioBuffer = await (this.prefetchCache.get(blockIndex) ?? Promise.resolve(null));
+        const audioDurationMs = getWavDurationMs(audioBuffer);
+        this.log(`[video] block ${blockIndex}: audio duration ${audioDurationMs}ms`);
+
         const blueprint = await generateBlueprint(
           block.code,
           block.label,
           narration,
-          ''
+          '',
+          audioDurationMs
         );
         this.blueprintCache.set(blockIndex, blueprint);
         this.log(`[video] block ${blockIndex}: blueprint done (${blueprint.scenes.length} scenes) — rendering...`);
@@ -857,6 +862,26 @@ export class WalkthroughSession {
     this.hideSubtitle?.();
     this.videoCacheMap.clear();
     this.blueprintCache.clear();
+  }
+}
+
+// ── WAV duration reader ───────────────────────────────────────────────────────
+
+function getWavDurationMs(audio: Buffer | null): number {
+  if (!audio || audio.length < 44) return 8000;
+  try {
+    const byteRate = audio.readUInt32LE(28);
+    let dataSize = 0;
+    for (let i = 12; i < audio.length - 8; i++) {
+      if (audio.toString('ascii', i, i + 4) === 'data') {
+        dataSize = audio.readUInt32LE(i + 4);
+        break;
+      }
+    }
+    if (byteRate === 0 || dataSize === 0) return 8000;
+    return Math.round((dataSize / byteRate) * 1000);
+  } catch {
+    return 8000;
   }
 }
 

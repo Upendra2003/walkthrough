@@ -8,7 +8,7 @@ const FPS = 30;
 
 export const RemotionRoot: React.FC = () => {
   const defaultProps: { blueprint: AnimationBlueprint } = { blueprint: sampleBlueprint };
-  const durationInFrames = sampleBlueprint.scenes.length * sampleBlueprint.durationPerScene * FPS;
+  const durationInFrames = Math.ceil((sampleBlueprint.audioDurationMs / 1000) * FPS);
 
   return (
     <Composition

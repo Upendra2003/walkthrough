@@ -4,7 +4,7 @@ export const sampleBlueprint: AnimationBlueprint = {
   fileTitle: "auth.ts",
   blockLabel: "refreshToken()",
   narration: "This function checks if the JWT token is expired and requests a new one from the server",
-  durationPerScene: 4,
+  audioDurationMs: 18000,
   scenes: [
     {
       type: "textpop",

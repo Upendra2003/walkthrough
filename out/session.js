@@ -371,7 +371,10 @@ class WalkthroughSession {
         this.log(`[video] block ${blockIndex} (${block.label}): generating blueprint...`);
         const promise = (async () => {
             try {
-                const blueprint = await (0, generateBlueprint_1.generateBlueprint)(block.code, block.label, narration, '');
+                const audioBuffer = await (this.prefetchCache.get(blockIndex) ?? Promise.resolve(null));
+                const audioDurationMs = getWavDurationMs(audioBuffer);
+                this.log(`[video] block ${blockIndex}: audio duration ${audioDurationMs}ms`);
+                const blueprint = await (0, generateBlueprint_1.generateBlueprint)(block.code, block.label, narration, '', audioDurationMs);
                 this.blueprintCache.set(blockIndex, blueprint);
                 this.log(`[video] block ${blockIndex}: blueprint done (${blueprint.scenes.length} scenes) — rendering...`);
                 const result = await (0, videoRenderer_1.renderBlockVideo)({
@@ -743,6 +746,27 @@ class WalkthroughSession {
     }
 }
 exports.WalkthroughSession = WalkthroughSession;
+// ── WAV duration reader ───────────────────────────────────────────────────────
+function getWavDurationMs(audio) {
+    if (!audio || audio.length < 44)
+        return 8000;
+    try {
+        const byteRate = audio.readUInt32LE(28);
+        let dataSize = 0;
+        for (let i = 12; i < audio.length - 8; i++) {
+            if (audio.toString('ascii', i, i + 4) === 'data') {
+                dataSize = audio.readUInt32LE(i + 4);
+                break;
+            }
+        }
+        if (byteRate === 0 || dataSize === 0)
+            return 8000;
+        return Math.round((dataSize / byteRate) * 1000);
+    }
+    catch {
+        return 8000;
+    }
+}
 // ── WAV trimmer ───────────────────────────────────────────────────────────────
 // Creates a new WAV buffer starting `skipMs` into the original clip.
 // Assumes standard 44-byte PCM WAV header (what Sarvam TTS produces).

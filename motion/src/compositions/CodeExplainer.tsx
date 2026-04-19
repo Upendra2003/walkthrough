@@ -41,18 +41,19 @@ export const CodeExplainer: React.FC<Props> = ({ blueprint }) => {
 
   if (!blueprint) return null;
 
-  const sceneDurationFrames = Math.round(blueprint.durationPerScene * fps);
-  const sceneCount = blueprint.scenes.length;
+  const sceneCount = Math.max(1, blueprint.scenes.length);
+  const totalFrames = Math.ceil((blueprint.audioDurationMs / 1000) * fps);
+  const framesPerScene = Math.max(1, Math.floor(totalFrames / sceneCount));
 
   // Compute which scene is active and the frame within that scene
-  const sceneIndex = Math.min(Math.floor(frame / sceneDurationFrames), sceneCount - 1);
-  const localFrame = frame - sceneIndex * sceneDurationFrames;
+  const sceneIndex = Math.min(Math.floor(frame / framesPerScene), sceneCount - 1);
+  const localFrame = frame - sceneIndex * framesPerScene;
 
   // Crossfade opacity for current scene
   const fadeIn = interpolate(localFrame, [0, CROSSFADE_FRAMES], [0, 1], { extrapolateRight: 'clamp' });
   const fadeOut = interpolate(
     localFrame,
-    [sceneDurationFrames - CROSSFADE_FRAMES, sceneDurationFrames],
+    [framesPerScene - CROSSFADE_FRAMES, framesPerScene],
     [1, 0],
     { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' },
   );

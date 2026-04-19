@@ -15,9 +15,8 @@ export interface AnimationBlueprint {
   blockLabel: string;
   narration: string;
   scenes: AnimationScene[];
-  durationPerScene: number;
+  audioDurationMs: number; // source of truth — video matches this exactly
   silent?: boolean;
   audioPath?: string;
-  audioDurationMs?: number;
   wordTimings?: WordTiming[];
 }
