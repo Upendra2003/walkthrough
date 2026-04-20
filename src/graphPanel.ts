@@ -1,12 +1,9 @@
 /**
  * GraphPanel — unified right-panel WebviewPanel.
  *
- * Layout (flex column, 100vh):
- *   1. #graph-section    — scrollable file tree           (flex: 0 0 50%)
- *   2. #video-zone       — silent Remotion MP4            (flex: 0 0 50%, always visible, placeholder until ready, fullscreen btn)
- *   3. #subtitle-section — fixed-height subtitle zone     (88px, no lang tag)
- *   4. #progress-track   — animated read-line             (3px, pure #FF0000)
- *   5. #controls-bar     — video-player controls
+ * Layout (flex row, 100vh):
+ *   LEFT column (65%): #video-zone (flex:1) → #subtitle-section → #progress-track → #controls-bar
+ *   RIGHT column (35%): #graph-section (scrollable codebase map)
  *
  * Font: Source Sans 3 (Google Fonts)
  *
@@ -211,7 +208,7 @@ body {
   font-family: 'Source Sans 3', var(--vscode-font-family, 'Segoe UI'), system-ui, sans-serif;
   font-size: 13px;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   height: 100vh;
   margin: 0;
   padding: 0;
@@ -219,7 +216,27 @@ body {
   user-select: none;
 }
 
-/* ════ Video zone — lower half of dynamic space ════ */
+/* ════ Left column — video + controls ════ */
+#left-col {
+  flex: 0 0 65%;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #0a0a0f;
+}
+
+/* ════ Right column — codebase map ════ */
+#right-col {
+  flex: 1 1 0;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-left: 1px solid rgba(255,255,255,0.07);
+  background: #0d1117;
+  overflow: hidden;
+}
+
+/* ════ Video zone — fills left column ════ */
 #video-zone {
   flex: 1 1 0;
   min-height: 0;
@@ -228,7 +245,6 @@ body {
   display: flex;
   position: relative;
   overflow: hidden;
-  border-top: 1px solid rgba(255,255,255,0.07);
 }
 #video-placeholder {
   position: absolute;
@@ -280,13 +296,13 @@ body {
 }
 #btn-fullscreen:hover { background: rgba(0,0,0,0.85); color: white; }
 
-/* ════ Graph section — upper half of dynamic space ════ */
+/* ════ Graph section — right column, fully scrollable ════ */
 #graph-section {
   flex: 1 1 0;
   overflow-y: auto;
-  padding: 16px 12px 12px;
+  overflow-x: hidden;
+  padding: 14px 10px 12px;
   min-height: 0;
-  border-bottom: 1px solid rgba(255,255,255,0.06);
 }
 
 #header {
@@ -381,12 +397,12 @@ body {
   flex-shrink: 0;
   height: 88px;
   overflow: hidden;
-  border-top: 0.5px solid rgba(255,255,255,0.07);
-  background: linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.78) 100%);
+  border-top: 0.5px solid rgba(255,255,255,0.06);
+  background: rgba(0,0,0,0.82);
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 12px 20px;
+  padding: 10px 16px;
   transition: opacity 0.25s ease;
 }
 #subtitle-section.hidden {
@@ -635,47 +651,35 @@ body {
 </head>
 <body>
 
-<!-- ① File tree (always visible, scrollable) -->
-<div id="graph-section">
-  <div id="header">
-    <h2>&#x2B21; Codebase Map</h2>
-    <span id="stats"></span>
-  </div>
-  <div id="tree"></div>
-  <div id="legend">
-    <span class="legend-item"><span class="dot dot-active"></span>active</span>
-    <span class="legend-item"><span class="dot dot-done"></span>done</span>
-    <span class="legend-item"><span class="dot dot-skipped"></span>skipped</span>
-    <span class="legend-item"><span class="dot dot-pending"></span>pending</span>
-  </div>
-</div>
+<!-- LEFT column: video + subtitle + controls -->
+<div id="left-col">
 
-<!-- ② Video zone — always visible, placeholder until MP4 ready -->
-<div id="video-zone">
-  <div id="video-placeholder">
-    <div id="video-placeholder-icon">&#x25B6;&#xFE0F;</div>
-    <div>animation renders here</div>
+  <!-- ① Video zone — always visible, placeholder until MP4 ready -->
+  <div id="video-zone">
+    <div id="video-placeholder">
+      <div id="video-placeholder-icon">&#x25B6;&#xFE0F;</div>
+      <div>animation renders here</div>
+    </div>
+    <video id="walkthrough-video" preload="auto" muted></video>
+    <div id="video-loading">&#x23F3; rendering visuals&hellip;</div>
+    <button id="btn-fullscreen" title="Fullscreen">&#x26F6;</button>
   </div>
-  <video id="walkthrough-video" preload="auto" muted></video>
-  <div id="video-loading">&#x23F3; rendering visuals&hellip;</div>
-  <button id="btn-fullscreen" title="Fullscreen">&#x26F6;</button>
-</div>
 
-<!-- ③ Subtitle (no lang tag) -->
-<div id="subtitle-section" class="hidden">
-  <div id="subtitle-inner">
-    <div id="subtitle-words"></div>
-    <div id="subtitle-loading-msg"></div>
+  <!-- ② Subtitle (no lang tag) -->
+  <div id="subtitle-section" class="hidden">
+    <div id="subtitle-inner">
+      <div id="subtitle-words"></div>
+      <div id="subtitle-loading-msg"></div>
+    </div>
   </div>
-</div>
 
-<!-- ④ Progress read-line -->
-<div id="progress-track">
-  <div id="progress-fill"></div>
-</div>
+  <!-- ③ Progress read-line -->
+  <div id="progress-track">
+    <div id="progress-fill"></div>
+  </div>
 
-<!-- ⑤ Video-player controls -->
-<div id="controls-bar">
+  <!-- ④ Video-player controls -->
+  <div id="controls-bar">
 
   <!-- Left: prev / pause / next -->
   <div id="ctrl-primary">
@@ -737,7 +741,25 @@ body {
     <button class="ctrl-stop" data-action="stop" title="Stop  Esc">&#x23F9;</button>
 
   </div>
-</div>
+</div><!-- /#controls-bar -->
+</div><!-- /#left-col -->
+
+<!-- RIGHT column: scrollable codebase map -->
+<div id="right-col">
+  <div id="graph-section">
+    <div id="header">
+      <h2>&#x2B21; Codebase Map</h2>
+      <span id="stats"></span>
+    </div>
+    <div id="tree"></div>
+    <div id="legend">
+      <span class="legend-item"><span class="dot dot-active"></span>active</span>
+      <span class="legend-item"><span class="dot dot-done"></span>done</span>
+      <span class="legend-item"><span class="dot dot-skipped"></span>skipped</span>
+      <span class="legend-item"><span class="dot dot-pending"></span>pending</span>
+    </div>
+  </div>
+</div><!-- /#right-col -->
 
 <script>
 var vscode       = acquireVsCodeApi();
