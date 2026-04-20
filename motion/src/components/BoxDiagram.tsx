@@ -21,7 +21,7 @@ interface Props extends BoxScene {
   fps?: number;
 }
 
-export const BoxDiagram: React.FC<Props> = ({ title, items, frame: frameProp, fps: fpsProp }) => {
+export const BoxDiagram: React.FC<Props> = ({ title, items = [], frame: frameProp, fps: fpsProp }) => {
   const frameCtx = useCurrentFrame();
   const { fps: ctxFps } = useVideoConfig();
   const frame = frameProp ?? frameCtx;

@@ -126,15 +126,16 @@ class WalkthroughSession {
     // ── Public API ────────────────────────────────────────────────────────────
     async run() {
         this.log(`\n── Starting walkthrough — whole-file narration (press D for block-by-block) ──`);
+        // Kick off audio/narration fetch for block 0 early while the extension initialises.
+        // Video is rendered inline inside presentBlock (with progress updates).
         this.kickPrefetch(0);
-        this.prefetchVideo(0);
         // Phase 1: narrate the whole file as a single overview block
         await this.presentBlock(0);
         // Phase 2: if D was pressed during the overview, go block-by-block through functions
         if (!this.stopped && !this.fileSkipRequested && this.inBlockMode && this.blocks.length > 1) {
             this.log(`── Block-by-block mode (${this.blocks.length - 1} function block(s)) ──`);
             this.index = 1;
-            this.kickPrefetch(1);
+            // Block 1 prefetch was kicked off by presentBlock(0) — no need to kickPrefetch(1) here.
             while (!this.stopped && !this.fileSkipRequested && this.index < this.blocks.length) {
                 const dir = await this.presentBlock(this.index);
                 if (this.stopped)
@@ -425,29 +426,64 @@ class WalkthroughSession {
     async presentBlock(i) {
         const block = this.blocks[i];
         const tag = `[${i + 1}/${this.blocks.length}] ${block.label}`;
-        // New block starting — reset video to frame 0
         this.panel?.postMessage({ type: 'video-reset' });
-        this.kickPrefetch(i + 1);
-        this.prefetchVideo(i + 1);
         this.setStatus(`$(sync~spin) ${tag}`);
-        this.showSubtitle?.("⏳  Preparing narration...", true);
-        const audio = await this.prefetchCache.get(i);
-        // Narration is now cached — ensure video render is started for this block
-        this.prefetchVideo(i);
+        this.panel?.postMessage({ type: 'subtitle-loading', text: '🎬 Preparing visuals...' });
+        // ── Step 1: Get audio ─────────────────────────────────────────────────────
+        // Use cached promise from kickPrefetch/prefetchNextBlock, or fetch inline.
+        let audio;
+        const cachedAudio = this.prefetchCache.get(i);
+        this.log(`[presentBlock ${i}] audio cache hit=${!!cachedAudio}`);
+        if (cachedAudio) {
+            audio = await cachedAudio;
+        }
+        else {
+            audio = await this.fetchAudio(i);
+        }
+        this.log(`[presentBlock ${i}] audio ready — ${audio ? audio.length + ' bytes' : 'null'}`);
         if (this.stopped)
             return "next";
-        // Wait for video render before playing — keeps audio/video in sync
-        const videoPromise = this.videoCacheMap.get(i);
-        if (videoPromise) {
-            this.showSubtitle?.("🎬  Rendering animation...", true);
-            const mp4Path = await videoPromise;
-            if (mp4Path && !this.stopped) {
-                this.panel?.postMessage({ type: 'set-video-src', blockIndex: i, path: mp4Path });
+        // ── Step 2: Render video ──────────────────────────────────────────────────
+        // Use cached render (prefetched while previous block played) or render inline.
+        let mp4Path = '';
+        const cachedVideo = this.videoCacheMap.get(i);
+        this.log(`[presentBlock ${i}] video cache hit=${!!cachedVideo}`);
+        if (cachedVideo) {
+            mp4Path = await cachedVideo;
+            this.log(`[presentBlock ${i}] video from cache → ${mp4Path}`);
+        }
+        else if (this.wsRoot && this.filePath && this.cfg) {
+            const narrationText = this.narrationCache.get(i) ?? '';
+            const audioDurationMs = getWavDurationMs(audio);
+            this.log(`[presentBlock ${i}] inline render: audioDurationMs=${audioDurationMs}, narration="${narrationText.slice(0, 60)}..."`);
+            try {
+                this.log(`[presentBlock ${i}] calling generateBlueprint...`);
+                const blueprint = await (0, generateBlueprint_1.generateBlueprint)(block.code, block.label, narrationText, '', audioDurationMs);
+                this.log(`[presentBlock ${i}] blueprint OK — "${block.label}" | ${audioDurationMs}ms | ` +
+                    `${blueprint.scenes.length} scenes: ${blueprint.scenes.map((s) => s.type).join(' → ')}`);
+                const safeName = `${this.filePath.split(/[\\/]/).pop()?.replace(/[^a-zA-Z0-9]/g, '_') ?? 'file'}_block${i}`;
+                this.log(`[video] block ${i}: blueprint scenes = ${JSON.stringify(blueprint.scenes.map((s) => ({ type: s.type, keys: Object.keys(s) })))}`);
+                const result = await (0, videoRenderer_1.renderBlockVideo)({
+                    wsRoot: this.wsRoot,
+                    fileName: safeName,
+                    blueprint: { ...blueprint, silent: true },
+                    onProgress: (pct) => {
+                        this.panel?.postMessage({ type: 'subtitle-loading', text: `🎬 Preparing visuals... ${pct}%` });
+                    },
+                });
+                mp4Path = result.mp4Path;
+                this.log(`[video] block ${i}: render done → ${mp4Path}`);
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                const stack = err instanceof Error ? (err.stack ?? '') : '';
+                this.log(`[video] block ${i}: render ERROR — ${msg}\n${stack}`);
             }
         }
         if (this.stopped)
             return "next";
         const narration = this.narrationCache.get(i) ?? "";
+        // ── Step 3: Handle signals queued during the loading phase ────────────────
         if (this.pendingDeepDive) {
             this.pendingDeepDive = false;
             if (block.level === 0) {
@@ -468,6 +504,22 @@ class WalkthroughSession {
             return dir;
         }
         this.applyBlockDecoration(block);
+        // ── Step 4: Set video source, then start video + audio together ───────────
+        this.panel?.postMessage({ type: 'subtitle-hide' });
+        if (mp4Path) {
+            this.panel?.postMessage({ type: 'set-video-src', blockIndex: i, path: mp4Path });
+        }
+        // Wait for the webview to load the new video src before playing.
+        await new Promise(resolve => setTimeout(resolve, 300));
+        // Send video-play with a startup-delay so video begins at the same moment
+        // the audio process produces its first sample (PLAYER_STARTUP_MS after spawn).
+        this.panel?.postMessage({ type: 'video-play', delayMs: PLAYER_STARTUP_MS });
+        // ── Step 5: Prefetch next block concurrently while current block plays ────
+        const nextIdx = i + 1;
+        if (!this.stopped && nextIdx < this.blocks.length && !this.videoCacheMap.has(nextIdx)) {
+            void this.prefetchNextBlock(nextIdx);
+        }
+        // ── Step 6: Play audio + subtitles ────────────────────────────────────────
         let dir;
         if (audio !== null) {
             this.setStatus(`$(megaphone) ${tag}`);
@@ -477,7 +529,6 @@ class WalkthroughSession {
         }
         else {
             this.setStatus(`$(warning) ${tag} — TTS failed`);
-            this.log(`${tag} → fallback 2s`);
             if (narration)
                 this.showSubtitle?.(narration);
             dir = await this.fallbackWait(2000);
@@ -498,6 +549,45 @@ class WalkthroughSession {
             return "next";
         }
         return dir;
+    }
+    // ── Prefetch next block in background ─────────────────────────────────────
+    async prefetchNextBlock(blockIndex) {
+        if (this.videoCacheMap.has(blockIndex))
+            return;
+        if (!this.wsRoot || !this.filePath || !this.cfg)
+            return;
+        if (blockIndex >= this.blocks.length)
+            return;
+        this.log(`[Walkthrough] Prefetch starting: block ${blockIndex}`);
+        const block = this.blocks[blockIndex];
+        const videoPromise = (async () => {
+            try {
+                const ctx = (blockIndex === 0 && this.fileContext) ? this.fileContext : undefined;
+                const narration = await (0, narrate_1.fetchNarration)(block.label, block.code, ctx);
+                this.narrationCache.set(blockIndex, narration);
+                this.log(`[script] [${blockIndex + 1}/${this.blocks.length}] ${block.label}:\n${narration}`);
+                const audio = await (0, narrate_1.generateAudio)(narration);
+                // Cache audio so presentBlock can use it without re-generating.
+                this.prefetchCache.set(blockIndex, Promise.resolve(audio));
+                const audioDurationMs = getWavDurationMs(audio);
+                const blueprint = await (0, generateBlueprint_1.generateBlueprint)(block.code, block.label, narration, '', audioDurationMs);
+                const safeName = `${this.filePath.split(/[\\/]/).pop()?.replace(/[^a-zA-Z0-9]/g, '_') ?? 'file'}_block${blockIndex}`;
+                const result = await (0, videoRenderer_1.renderBlockVideo)({
+                    wsRoot: this.wsRoot,
+                    fileName: safeName,
+                    blueprint: { ...blueprint, silent: true },
+                    // no onProgress — this is a silent background render
+                });
+                this.log(`[Walkthrough] Prefetch done: block ${blockIndex}`);
+                return result.mp4Path;
+            }
+            catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                this.log(`[Walkthrough] Prefetch failed block ${blockIndex}: ${msg}`);
+                return '';
+            }
+        })();
+        this.videoCacheMap.set(blockIndex, videoPromise);
     }
     // ── Deep Dive ─────────────────────────────────────────────────────────────
     async runDeepDive(block, blockTag) {

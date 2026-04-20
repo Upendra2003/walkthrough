@@ -873,11 +873,11 @@ function updateSubtitle(words, activeIndex, intervalMs) {
   setProgress(pct, intervalMs);
 }
 
-function showSubtitleLoading() {
+function showSubtitleLoading(text) {
   $sub().classList.remove('hidden');
   $words().style.display = 'none';
   var el = $loading();
-  el.textContent = 'preparing\u2026';
+  el.textContent = text || 'preparing\u2026';
   el.className = 'pulsing';
   setProgress(0, 0);
 }
@@ -968,7 +968,7 @@ window.addEventListener('message', function(event) {
       updateSubtitle(data.words, data.activeIndex, data.intervalMs);
       break;
     case 'subtitle-loading':
-      showSubtitleLoading();
+      showSubtitleLoading(data.text);
       break;
     case 'subtitle-hide':
       hideSubtitle();
@@ -998,7 +998,20 @@ window.addEventListener('message', function(event) {
       videoS.oncanplay = function() {
         if (loadEl) loadEl.style.display = 'none';
       };
-      if (!isPaused) videoS.play().catch(function(){});
+      // Do NOT auto-play here — wait for explicit 'video-play' message so video
+      // and audio start at the same moment.
+      break;
+    }
+    case 'video-play': {
+      var videoVP = document.getElementById('walkthrough-video');
+      if (!videoVP || !videoVP.src) break;
+      videoVP.currentTime = 0;
+      var vpDelay = data.delayMs || 0;
+      if (vpDelay > 0) {
+        setTimeout(function() { videoVP.play().catch(function(){}); }, vpDelay);
+      } else {
+        videoVP.play().catch(function(){});
+      }
       break;
     }
     case 'video-reset': {

@@ -9,6 +9,24 @@ import { TreeDiagram } from '../components/TreeDiagram';
 import { LoopDiagram } from '../components/LoopDiagram';
 import { AsyncDiagram } from '../components/AsyncDiagram';
 import { TextPop } from '../components/TextPop';
+import { ErrorFlow } from '../components/ErrorFlow';
+import { DatabaseQuery } from '../components/DatabaseQuery';
+import { APIRequest } from '../components/APIRequest';
+import { JSONViewer } from '../components/JSONViewer';
+import { EnvConfig } from '../components/EnvConfig';
+import { AuthFlow } from '../components/AuthFlow';
+import { ArrayVisualizer } from '../components/ArrayVisualizer';
+import { StackVisualizer } from '../components/StackVisualizer';
+import { ConditionalBranch } from '../components/ConditionalBranch';
+import { PipelineFlow } from '../components/PipelineFlow';
+import { MiddlewareChain } from '../components/MiddlewareChain';
+import { EventEmitter } from '../components/EventEmitter';
+import { SuccessResult } from '../components/SuccessResult';
+import { TimelineEvents } from '../components/TimelineEvents';
+import { CompareView } from '../components/CompareView';
+import { HashMapVisualizer } from '../components/HashMapVisualizer';
+import { StatsCounter } from '../components/StatsCounter';
+import { GraphNodes } from '../components/GraphNodes';
 
 const BAR_HEIGHT = 60;
 const CROSSFADE_FRAMES = 8;
@@ -24,14 +42,36 @@ const renderScene = (
 ) => {
   const base = { frame: localFrame, fps };
   switch (scene.type) {
-    case 'flow':    return <FlowDiagram {...scene} {...base} />;
-    case 'arrow':   return <ArrowDiagram {...scene} {...base} />;
-    case 'box':     return <BoxDiagram {...scene} {...base} />;
-    case 'tree':    return <TreeDiagram {...scene} {...base} />;
-    case 'loop':    return <LoopDiagram {...scene} {...base} />;
-    case 'async':   return <AsyncDiagram {...scene} {...base} />;
-    case 'textpop': return <TextPop {...scene} {...base} />;
-    default:        return null;
+    case 'flow':          return <FlowDiagram {...scene} {...base} />;
+    case 'arrow':         return <ArrowDiagram {...scene} {...base} />;
+    case 'box':           return <BoxDiagram {...scene} {...base} />;
+    case 'tree':          return <TreeDiagram {...scene} {...base} />;
+    case 'loop':          return <LoopDiagram {...scene} {...base} />;
+    case 'async':         return <AsyncDiagram {...scene} {...base} />;
+    case 'textpop':       return <TextPop {...scene} {...base} />;
+    case 'error-flow':    return <ErrorFlow {...scene} {...base} />;
+    case 'database':      return <DatabaseQuery {...scene} {...base} />;
+    case 'api-request':   return <APIRequest {...scene} {...base} />;
+    case 'json-viewer':   return <JSONViewer {...scene} {...base} />;
+    case 'env-config':    return <EnvConfig {...scene} {...base} />;
+    case 'auth-flow':     return <AuthFlow {...scene} {...base} />;
+    case 'array':         return <ArrayVisualizer {...scene} {...base} />;
+    case 'stack':         return <StackVisualizer {...scene} {...base} />;
+    case 'conditional':   return <ConditionalBranch {...scene} {...base} />;
+    case 'pipeline':      return <PipelineFlow {...scene} {...base} />;
+    case 'middleware':    return <MiddlewareChain {...scene} {...base} />;
+    case 'event-emitter': return <EventEmitter {...scene} {...base} />;
+    case 'success':       return <SuccessResult {...scene} {...base} />;
+    case 'timeline':      return <TimelineEvents {...scene} {...base} />;
+    case 'compare':       return <CompareView {...scene} {...base} />;
+    case 'hashmap':       return <HashMapVisualizer {...scene} {...base} />;
+    case 'stats':         return <StatsCounter {...scene} {...base} />;
+    case 'graph-nodes':   return <GraphNodes {...scene} {...base} />;
+    // LLM sometimes hallucinates these — map to nearest visual equivalent
+    case 'import' as any: return <TreeDiagram {...(scene as any)} {...base} />;
+    case 'imports' as any: return <TreeDiagram {...(scene as any)} {...base} />;
+    case 'class' as any:  return <BoxDiagram {...(scene as any)} {...base} />;
+    default:              return null;
   }
 };
 
@@ -45,11 +85,9 @@ export const CodeExplainer: React.FC<Props> = ({ blueprint }) => {
   const totalFrames = Math.ceil((blueprint.audioDurationMs / 1000) * fps);
   const framesPerScene = Math.max(1, Math.floor(totalFrames / sceneCount));
 
-  // Compute which scene is active and the frame within that scene
   const sceneIndex = Math.min(Math.floor(frame / framesPerScene), sceneCount - 1);
   const localFrame = frame - sceneIndex * framesPerScene;
 
-  // Crossfade opacity for current scene
   const fadeIn = interpolate(localFrame, [0, CROSSFADE_FRAMES], [0, 1], { extrapolateRight: 'clamp' });
   const fadeOut = interpolate(
     localFrame,

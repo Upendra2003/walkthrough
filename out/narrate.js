@@ -96,11 +96,13 @@ const PLAIN_SPEECH_RULE = "IMPORTANT: Write in plain spoken English only. " +
     "Do NOT use backticks, underscores, asterisks, hash signs, angle brackets, or any markdown. " +
     "Do NOT write variable/function names in code style — say them as plain words. " +
     "This text is read aloud by a TTS voice so write exactly as you would speak.";
-const SYSTEM_PROMPT = "You are a friendly senior developer giving a live code tour to a new teammate. " +
-    "Talk like you're explaining over coffee — casual, warm, genuinely helpful. " +
-    "In 2-3 sentences: what the block DOES, WHY it exists, how it fits the bigger picture. " +
-    "Use simple analogies for complex concepts. Skip jargon. " +
-    "Never just restate the code — tell the person what they actually need to understand. " +
+const SYSTEM_PROMPT = "You are a code walkthrough narrator for an animated video tool. " +
+    "Summarise this code block in 3 to 4 sentences, 60 to 80 words total. " +
+    "Sentence 1: state the single main purpose of this block — what it does. " +
+    "Sentences 2 to 3: walk through the key flow — what happens first, what the important check or action is. " +
+    "Sentence 4 if needed: the final outcome, return value, or side effect. " +
+    "Be direct and technical. No analogies, no filler, no 'think of it as' phrases. " +
+    "For a File Overview block: describe the file's architecture and main responsibility — not individual imports. " +
     PLAIN_SPEECH_RULE;
 // ---------------------------------------------------------------------------
 // Raw HTTP helper

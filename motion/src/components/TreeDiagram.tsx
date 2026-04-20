@@ -52,7 +52,7 @@ interface Props extends TreeScene {
   fps?: number;
 }
 
-export const TreeDiagram: React.FC<Props> = ({ root, children, frame: frameProp, fps: fpsProp }) => {
+export const TreeDiagram: React.FC<Props> = ({ root, children = [], frame: frameProp, fps: fpsProp }) => {
   const frameCtx = useCurrentFrame();
   const { fps: ctxFps } = useVideoConfig();
   const frame = frameProp ?? frameCtx;

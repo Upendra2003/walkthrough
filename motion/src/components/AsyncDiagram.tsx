@@ -19,7 +19,7 @@ interface Props extends AsyncScene {
   fps?: number;
 }
 
-export const AsyncDiagram: React.FC<Props> = ({ title, steps, frame: frameProp, fps: fpsProp }) => {
+export const AsyncDiagram: React.FC<Props> = ({ title, steps = [], frame: frameProp, fps: fpsProp }) => {
   const frameCtx = useCurrentFrame();
   const { fps: ctxFps } = useVideoConfig();
   const frame = frameProp ?? frameCtx;

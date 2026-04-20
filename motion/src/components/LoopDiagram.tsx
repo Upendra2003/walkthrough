@@ -20,7 +20,7 @@ interface Props extends LoopScene {
   fps?: number;
 }
 
-export const LoopDiagram: React.FC<Props> = ({ title, iterates, body, frame: frameProp, fps: fpsProp }) => {
+export const LoopDiagram: React.FC<Props> = ({ title, iterates = '', body = [], frame: frameProp, fps: fpsProp }) => {
   const frameCtx = useCurrentFrame();
   const { fps: ctxFps } = useVideoConfig();
   const frame = frameProp ?? frameCtx;

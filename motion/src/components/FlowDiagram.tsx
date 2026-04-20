@@ -18,7 +18,7 @@ interface Props extends FlowScene {
   fps?: number;
 }
 
-export const FlowDiagram: React.FC<Props> = ({ steps, title, frame: frameProp, fps: fpsProp }) => {
+export const FlowDiagram: React.FC<Props> = ({ steps = [], title, frame: frameProp, fps: fpsProp }) => {
   const frameCtx = useCurrentFrame();
   const { fps: ctxFps } = useVideoConfig();
   const frame = frameProp ?? frameCtx;
