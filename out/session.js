@@ -226,6 +226,10 @@ class WalkthroughSession {
             return;
         this.log("  ⏭  Skip file");
         this.fileSkipRequested = true;
+        // Always reset webview to video mode so the next file's video plays correctly
+        if (this.mode === 'deepdive') {
+            this.panel?.postMessage({ type: 'exit-deepdive' });
+        }
         this.mode = 'video';
         const r = this.deepDiveExitResolve;
         this.deepDiveExitResolve = null;
@@ -958,9 +962,16 @@ class WalkthroughSession {
             const audio = await (0, narrate_1.generateAudio)(narration);
             this.panel?.postMessage({ type: 'deepdive-audio-ready' });
             if (!this.stopped) {
+                const words = narration.trim().split(/\s+/).filter(Boolean);
+                const wordIntervalMs = this.estimateWordIntervalMs(audio, words.length);
                 const player = new audioPlayer_1.AudioPlayer();
                 this.currentPlayer = player;
+                // Start subtitle + progress bar animation in sync with audio
+                await new Promise(r => setTimeout(r, PLAYER_STARTUP_MS));
+                this.startSubtitleAnimation(narration, 0, wordIntervalMs);
                 await player.play(audio);
+                this.cancelSubtitleAnimation();
+                this.clearSubtitle();
                 this.currentPlayer = null;
                 this.panel?.postMessage({ type: 'deepdive-audio-ended' });
             }
