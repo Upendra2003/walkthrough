@@ -831,68 +831,70 @@ body {
   cursor: pointer;
 }
 
-/* ── Node explanation card ── */
-#fc-explanation-card {
-  position: absolute;
-  bottom: 14px;
-  left: 50%;
-  transform: translateX(-50%) translateY(8px);
-  background: rgba(8, 8, 20, 0.97);
-  border: 1px solid rgba(99,102,241,0.5);
-  border-radius: 12px;
-  padding: 14px 18px 16px;
-  min-width: 260px;
-  max-width: 420px;
-  z-index: 60;
+/* ── Step slideshow panel (above canvas) ── */
+#fc-step-panel {
+  flex-shrink: 0;
+  padding: 12px 18px 14px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: rgba(0,0,0,0.28);
   display: none;
-  box-shadow: 0 6px 32px rgba(0,0,0,0.75), 0 0 0 1px rgba(99,102,241,0.12);
-  pointer-events: auto;
 }
-#fc-explanation-card.visible {
-  display: block;
-  animation: cardSlideIn 0.18s ease both;
-}
-@keyframes cardSlideIn {
-  from { opacity: 0; transform: translateX(-50%) translateY(18px); }
-  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
-}
-#fc-card-header {
+#fc-step-panel.visible { display: block; }
+
+#fc-step-dots {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin-bottom: 9px;
+  gap: 7px;
+  margin-bottom: 11px;
+  flex-wrap: wrap;
 }
-#fc-card-dot {
-  color: #818cf8;
-  font-size: 9px;
+.fc-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.18);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.15s, transform 0.15s;
   flex-shrink: 0;
 }
-#fc-card-label {
-  flex: 1;
-  font-size: 13px;
+.fc-dot:hover:not(.fc-dot-active) { background: rgba(255,255,255,0.45); }
+.fc-dot.fc-dot-active {
+  background: #818cf8;
+  transform: scale(1.35);
+}
+#fc-step-title {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+#fc-step-num {
+  font-size: 11px;
   font-weight: 700;
-  color: #a5b4fc;
+  color: rgba(129,140,248,0.65);
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+}
+#fc-step-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #e2e8f0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-#fc-card-close {
-  background: none;
-  border: none;
-  color: rgba(255,255,255,0.3);
-  font-size: 13px;
-  cursor: pointer;
-  padding: 0 2px;
-  line-height: 1;
-  flex-shrink: 0;
-  transition: color 0.12s;
-}
-#fc-card-close:hover { color: rgba(255,255,255,0.85); }
-#fc-card-body {
-  font-size: 13px;
+#fc-step-desc {
+  font-size: 12.5px;
   line-height: 1.65;
-  color: rgba(255,255,255,0.8);
+  color: rgba(255,255,255,0.6);
   margin: 0;
+  max-height: 60px;
+  overflow: hidden;
+}
+.fc-node-active {
+  filter: drop-shadow(0 0 8px rgba(129,140,248,0.95)) brightness(1.25) !important;
 }
 </style>
 </head>
@@ -919,21 +921,21 @@ body {
       <span id="flowchart-block-label"></span>
       <span id="flowchart-progress"></span>
     </div>
+    <!-- Step slideshow: dots + title + description -->
+    <div id="fc-step-panel">
+      <div id="fc-step-dots"></div>
+      <div id="fc-step-title">
+        <span id="fc-step-num"></span>
+        <span id="fc-step-label"></span>
+      </div>
+      <p id="fc-step-desc"></p>
+    </div>
     <div id="flowchart-canvas">
       <div id="flowchart-loading-overlay"><span>&#x1F50D; Generating flowchart...</span></div>
       <div id="flowchart-error"></div>
       <div id="fc-end-card"><p>End of file</p><button id="fc-next-file-btn">&#x25B6; Next File</button></div>
       <button id="fc-reset-btn" title="Reset view">&#x21BA;</button>
       <div id="fc-continue-prompt">&#x25B6; Continue</div>
-      <!-- Node explanation card — shown on node click -->
-      <div id="fc-explanation-card">
-        <div id="fc-card-header">
-          <span id="fc-card-dot">&#x25CF;</span>
-          <span id="fc-card-label"></span>
-          <button id="fc-card-close">&#x2715;</button>
-        </div>
-        <p id="fc-card-body"></p>
-      </div>
     </div>
     <div id="flowchart-footer">
       <button id="fc-audio-btn">&#x1F50A; Generate Audio</button>
@@ -1479,7 +1481,11 @@ async function fcRenderMermaid(mermaidStr, blockLabel, blockIndex, totalBlocks) 
     document.getElementById('flowchart-error').style.display = 'none';
     document.getElementById('fc-audio-btn').classList.remove('loading');
     document.getElementById('fc-audio-btn').textContent = '\\uD83D\\uDD0A Generate Audio';
-    hideExplanationCard();
+    // Reset step panel
+    var panel = document.getElementById('fc-step-panel');
+    if (panel) panel.classList.remove('visible');
+    fcActiveStep = -1;
+    clearNodeHighlight();
   } catch (err) {
     var errEl = document.getElementById('flowchart-error');
     errEl.textContent = 'Render error: ' + (err && err.message ? err.message : String(err));
@@ -1488,28 +1494,119 @@ async function fcRenderMermaid(mermaidStr, blockLabel, blockIndex, totalBlocks) 
   fcHideLoading();
 }
 
-// ── Node explanation card ─────────────────────────────────────────────────────
+// ── Step slideshow ────────────────────────────────────────────────────────────
 
-function showExplanationCard(label, explanation) {
-  var card  = document.getElementById('fc-explanation-card');
-  var lbl   = document.getElementById('fc-card-label');
-  var body  = document.getElementById('fc-card-body');
-  if (!card || !lbl || !body) return;
-  lbl.textContent  = label;
-  body.textContent = explanation;
-  card.classList.remove('visible');
-  // Force reflow to restart animation
-  void card.offsetWidth;
-  card.classList.add('visible');
+var fcSteps      = [];   // [{id, label, explanation}, ...]
+var fcActiveStep = -1;
+
+function camelToTitle(s) {
+  return s.replace(/([A-Z])/g, ' $1')
+          .replace(/^./, function(c) { return c.toUpperCase(); })
+          .trim();
 }
 
-function hideExplanationCard() {
-  var card = document.getElementById('fc-explanation-card');
-  if (card) card.classList.remove('visible');
+function buildSteps(explanations) {
+  fcSteps = Object.entries(explanations).map(function(entry) {
+    var id  = entry[0];
+    var exp = entry[1];
+    return { id: id, label: camelToTitle(id), explanation: exp };
+  });
+  fcActiveStep = -1;
+}
+
+function renderDots() {
+  var dotsEl = document.getElementById('fc-step-dots');
+  if (!dotsEl) return;
+  dotsEl.innerHTML = '';
+  fcSteps.forEach(function(step, i) {
+    var dot = document.createElement('button');
+    dot.className = 'fc-dot' + (i === fcActiveStep ? ' fc-dot-active' : '');
+    dot.title = step.label;
+    dot.setAttribute('aria-label', 'Step ' + (i + 1) + ': ' + step.label);
+    dot.addEventListener('click', function() { setActiveStep(i); });
+    dotsEl.appendChild(dot);
+  });
+}
+
+function setActiveStep(index) {
+  if (index < 0 || index >= fcSteps.length) return;
+
+  // Dehighlight old node
+  clearNodeHighlight();
+
+  fcActiveStep = index;
+  var step = fcSteps[index];
+
+  // Update dots
+  document.querySelectorAll('.fc-dot').forEach(function(d, i) {
+    d.classList.toggle('fc-dot-active', i === index);
+  });
+
+  // Update text
+  var numEl  = document.getElementById('fc-step-num');
+  var lblEl  = document.getElementById('fc-step-label');
+  var descEl = document.getElementById('fc-step-desc');
+  if (numEl)  numEl.textContent  = (index + 1) + '.';
+  if (lblEl)  lblEl.textContent  = step.label;
+  if (descEl) descEl.textContent = step.explanation;
+
+  // Show panel
+  var panel = document.getElementById('fc-step-panel');
+  if (panel) panel.classList.add('visible');
+
+  // Highlight node in SVG
+  highlightNode(step.id, step.label);
+}
+
+function clearNodeHighlight() {
+  var canvas = document.getElementById('flowchart-canvas');
+  if (!canvas) return;
+  canvas.querySelectorAll('.fc-node-active').forEach(function(el) {
+    el.classList.remove('fc-node-active');
+    el.style.filter = '';
+    el.style.outline = '';
+  });
+}
+
+function highlightNode(nodeId, label) {
+  var canvas = document.getElementById('flowchart-canvas');
+  if (!canvas) return;
+
+  var found = null;
+
+  // 1. Exact ID match: flowchart-{nodeId}-0
+  var byId = canvas.querySelector('[id="flowchart-' + nodeId + '-0"]') ||
+             canvas.querySelector('[id="statediagram-' + nodeId + '-0"]');
+  if (byId) found = byId;
+
+  // 2. Partial ID match (handles numeric suffixes > 0)
+  if (!found) {
+    var all = canvas.querySelectorAll('[id*="' + nodeId + '"]');
+    for (var i = 0; i < all.length; i++) {
+      if (all[i].tagName === 'g' || all[i].classList.contains('node')) {
+        found = all[i]; break;
+      }
+    }
+  }
+
+  // 3. Text content match — find node whose label matches
+  if (!found) {
+    var nodes = canvas.querySelectorAll('g.node, g.actor, g.classGroup, .er.entityBox, .mindmap-node');
+    var lc = label.toLowerCase();
+    nodes.forEach(function(el) {
+      if (found) return;
+      var txt = el.textContent.replace(/\\s+/g, ' ').trim().toLowerCase();
+      if (txt === lc || txt.includes(lc) || lc.includes(txt.slice(0, 6))) found = el;
+    });
+  }
+
+  if (found) {
+    found.classList.add('fc-node-active');
+    found.style.filter = 'drop-shadow(0 0 8px rgba(129,140,248,0.95)) brightness(1.25)';
+  }
 }
 
 function extractFlowchartNodeId(svgId) {
-  // "flowchart-startNode-0" or "statediagram-Idle-0"  →  "startNode" / "Idle"
   var m = svgId.match(/^(?:flowchart|statediagram)-(.+)-\d+$/);
   return m ? m[1] : svgId;
 }
@@ -1529,51 +1626,13 @@ function getNodeLabel(el) {
   return '';
 }
 
-function lookupExplanation(nodeId, label) {
-  // Exact key match
-  if (currentExplanations[nodeId]) return currentExplanations[nodeId];
-  if (currentExplanations[label])  return currentExplanations[label];
-  // Case-insensitive match
-  var keys = Object.keys(currentExplanations);
-  for (var i = 0; i < keys.length; i++) {
-    var k = keys[i].toLowerCase();
-    if (k === nodeId.toLowerCase() || k === label.toLowerCase()) {
-      return currentExplanations[keys[i]];
-    }
-  }
-  // Partial match — label contains the key
-  for (var j = 0; j < keys.length; j++) {
-    if (label.toLowerCase().includes(keys[j].toLowerCase())) {
-      return currentExplanations[keys[j]];
-    }
-  }
-  return null;
-}
-
-function handleNodeClick(el, e) {
-  e.stopPropagation();
-  var svgId   = el.id || (el.closest('[id]') ? el.closest('[id]').id : '');
-  var nodeId  = extractFlowchartNodeId(svgId);
-  var label   = getNodeLabel(el) || nodeId;
-  var explanation = lookupExplanation(nodeId, label);
-  if (explanation) {
-    showExplanationCard(label, explanation);
-  }
-}
-
 function attachNodeClickHandlers() {
   var canvas = document.getElementById('flowchart-canvas');
   if (!canvas) return;
 
-  // Selectors for all Mermaid v11 diagram types
   var selectors = [
-    'g.node',                    // flowchart
-    'g.actor',                   // sequenceDiagram
-    'g.classGroup',              // classDiagram
-    '.er.entityBox',             // erDiagram
-    '.mindmap-node',             // mindmap
-    'g.statediagram-state',      // stateDiagram-v2
-    'g[class*="label-container"]', // fallback
+    'g.node', 'g.actor', 'g.classGroup',
+    '.er.entityBox', '.mindmap-node', 'g.statediagram-state',
   ];
 
   selectors.forEach(function(sel) {
@@ -1581,28 +1640,37 @@ function attachNodeClickHandlers() {
       if (el._fcClickAttached) return;
       el._fcClickAttached = true;
       el.style.cursor = 'pointer';
-      // Highlight on hover
       el.addEventListener('mouseenter', function() {
-        el.style.filter = 'brightness(1.25)';
+        if (!el.classList.contains('fc-node-active')) {
+          el.style.filter = 'brightness(1.2)';
+        }
       });
       el.addEventListener('mouseleave', function() {
-        el.style.filter = '';
+        if (!el.classList.contains('fc-node-active')) {
+          el.style.filter = '';
+        }
       });
-      el.addEventListener('click', function(e) { handleNodeClick(el, e); });
+      el.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var svgId  = el.id || (el.closest('[id]') ? el.closest('[id]').id : '');
+        var nodeId = extractFlowchartNodeId(svgId);
+        var label  = getNodeLabel(el) || nodeId;
+
+        // Find the matching step by ID or label
+        var idx = -1;
+        for (var i = 0; i < fcSteps.length; i++) {
+          var s = fcSteps[i];
+          if (s.id === nodeId || s.id.toLowerCase() === nodeId.toLowerCase() ||
+              s.label.toLowerCase() === label.toLowerCase() ||
+              label.toLowerCase().includes(s.id.toLowerCase())) {
+            idx = i; break;
+          }
+        }
+        if (idx >= 0) setActiveStep(idx);
+      });
     });
   });
 }
-
-// Close card when clicking blank canvas area
-document.getElementById('flowchart-canvas').addEventListener('click', function(e) {
-  var card = document.getElementById('fc-explanation-card');
-  if (card && !card.contains(e.target)) hideExplanationCard();
-});
-
-document.getElementById('fc-card-close').addEventListener('click', function(e) {
-  e.stopPropagation();
-  hideExplanationCard();
-});
 
 // ── Extend message handler ────────────────────────────────────────────────────
 
@@ -1627,6 +1695,8 @@ window.addEventListener('message', function(event) {
       break;
     case 'set-flowchart':
       currentExplanations = data.explanations || {};
+      buildSteps(currentExplanations);
+      renderDots();
       fcRenderMermaid(data.mermaid, data.blockLabel, data.blockIndex, data.totalBlocks);
       break;
     case 'flowchart-end':
