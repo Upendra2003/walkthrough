@@ -10,24 +10,24 @@
  *
  * Sarvam TTS key is read from activeConfig.sarvamApiKey, with .env as dev fallback.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function (o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
     if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
+        desc = { enumerable: true, get: function () { return m[k]; } };
     }
     Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
+}) : (function (o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
 }));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function (o, v) {
     Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
+}) : function (o, v) {
     o["default"] = v;
 });
 var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
+    var ownKeys = function (o) {
         ownKeys = Object.getOwnPropertyNames || function (o) {
             var ar = [];
             for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
@@ -46,6 +46,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setActiveConfig = setActiveConfig;
 exports.callLLM = callLLM;
+exports.translateText = translateText;
 exports.fetchNarration = fetchNarration;
 exports.generateAudio = generateAudio;
 exports.queryCodebase = queryCodebase;
@@ -87,6 +88,7 @@ function getConfig() {
         sarvamApiKey: process.env.SARVAM_API_KEY ?? "",
         customBaseUrl: "",
         embeddingProvider: "local",
+        language: "en",
     };
 }
 // ---------------------------------------------------------------------------
@@ -192,6 +194,69 @@ async function callAnthropic(systemPrompt, userContent, maxTokens, cfg) {
     return json.content?.[0]?.text?.trim() ?? "";
 }
 // ---------------------------------------------------------------------------
+// Sarvam language codes
+// ---------------------------------------------------------------------------
+const SARVAM_LANG_CODES = {
+    en: "en-IN", hi: "hi-IN", kn: "kn-IN", te: "te-IN",
+};
+// priya is en-IN only; priya works across all Indian languages in bulbul:v3
+const SARVAM_SPEAKERS = {
+    en: "priya", hi: "priya", kn: "priya", te: "priya",
+};
+// ---------------------------------------------------------------------------
+// Translation via Sarvam
+// ---------------------------------------------------------------------------
+function translateText(text, targetLang, sarvamApiKey) {
+    if (targetLang === "en")
+        return Promise.resolve(text);
+    const key = sarvamApiKey || process.env.SARVAM_API_KEY || "";
+    const targetCode = SARVAM_LANG_CODES[targetLang] ?? targetLang;
+    return new Promise((resolve, reject) => {
+        const body = JSON.stringify({
+            input: text,
+            source_language_code: "en-IN",
+            target_language_code: targetCode,
+            speaker_gender: "Female",
+            mode: "formal",
+            model: "mayura:v1",
+            enable_preprocessing: false,
+        });
+        const req = https.request({
+            hostname: "api.sarvam.ai",
+            path: "/translate",
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Content-Length": Buffer.byteLength(body),
+                "api-subscription-key": key,
+            },
+        }, (res) => {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => {
+                const raw = Buffer.concat(chunks).toString("utf8");
+                let json;
+                try {
+                    json = JSON.parse(raw);
+                }
+                catch {
+                    reject(new Error(`Sarvam translate non-JSON (HTTP ${res.statusCode}): ${raw.slice(0, 200)}`));
+                    return;
+                }
+                if (res.statusCode !== 200) {
+                    reject(new Error(`Sarvam translate HTTP ${res.statusCode}: ${JSON.stringify(json)}`));
+                    return;
+                }
+                resolve(json.translated_text ?? text);
+            });
+            res.on("error", reject);
+        });
+        req.on("error", reject);
+        req.write(body);
+        req.end();
+    });
+}
+// ---------------------------------------------------------------------------
 // Narration
 // ---------------------------------------------------------------------------
 /** Strip markdown symbols the model sneaks in — output goes to TTS. */
@@ -206,13 +271,25 @@ function sanitise(text) {
         .replace(/\s{2,}/g, " ")
         .trim();
 }
-async function fetchNarration(label, code, fileContext) {
+async function fetchNarration(label, code, fileContext, language = "en") {
     const userContent = fileContext
         ? `Context: ${fileContext}\n\nBlock: ${label}\n\n${code}`
         : `Block: ${label}\n\n${code}`;
     const raw = await callLLM(SYSTEM_PROMPT, userContent, 200);
     const clean = sanitise(raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim());
-    return clean || label;
+    const narration = clean || label;
+    if (language === "en")
+        return narration;
+    const cfg = getConfig();
+    try {
+        const translated = await translateText(narration, language, cfg.sarvamApiKey);
+        return translated;
+    }
+    catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.warn(`[translate → ${language}] FAILED (${msg}) — using English`);
+        return narration;
+    }
 }
 // ---------------------------------------------------------------------------
 // Sarvam TTS → WAV Buffer
@@ -224,15 +301,17 @@ function truncateForTTS(text) {
     const cut = text.lastIndexOf(' ', SARVAM_MAX_CHARS);
     return (cut > 0 ? text.slice(0, cut) : text.slice(0, SARVAM_MAX_CHARS)) + '…';
 }
-function generateAudio(text) {
+function generateAudio(text, language = "en") {
     const cfg = getConfig();
     const key = cfg.sarvamApiKey || process.env.SARVAM_API_KEY || "";
     const ttsText = truncateForTTS(text);
+    const targetLangCode = SARVAM_LANG_CODES[language] ?? "en-IN";
+    const speaker = SARVAM_SPEAKERS[language] ?? "priya";
     return new Promise((resolve, reject) => {
         const body = JSON.stringify({
             inputs: [ttsText],
-            target_language_code: "en-IN",
-            speaker: "priya",
+            target_language_code: targetLangCode,
+            speaker,
             model: "bulbul:v3",
             enable_preprocessing: true,
         });
@@ -295,29 +374,29 @@ function makeQdrantRequest(method, urlPath, body) {
             path: fullUrl.pathname + (fullUrl.search || ""),
             method,
             headers,
-        }, 
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        (res) => {
-            const chunks = [];
-            res.on("data", (c) => chunks.push(c));
-            res.on("end", () => {
-                const text = Buffer.concat(chunks).toString("utf8");
-                try {
-                    resolve(JSON.parse(text));
-                }
-                catch {
-                    reject(new Error(`Qdrant non-JSON (HTTP ${res.statusCode}): ${text.slice(0, 200)}`));
-                }
+        },
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (res) => {
+                const chunks = [];
+                res.on("data", (c) => chunks.push(c));
+                res.on("end", () => {
+                    const text = Buffer.concat(chunks).toString("utf8");
+                    try {
+                        resolve(JSON.parse(text));
+                    }
+                    catch {
+                        reject(new Error(`Qdrant non-JSON (HTTP ${res.statusCode}): ${text.slice(0, 200)}`));
+                    }
+                });
+                res.on("error", reject);
             });
-            res.on("error", reject);
-        });
         req.on("error", reject);
         if (bodyStr)
             req.write(bodyStr);
         req.end();
     });
 }
-async function queryCodebase(question, onProgress) {
+async function queryCodebase(question, onProgress, language = "en") {
     const cfg = getConfig();
     // ── 1. Embed the question ─────────────────────────────────────────────────
     onProgress?.("Analysing your question...");
@@ -345,9 +424,9 @@ async function queryCodebase(question, onProgress) {
     // ── 3. Build ranked context for the LLM ──────────────────────────────────
     const context = hits
         .map((h, i) => {
-        const snippet = (h.payload.code ?? "").slice(0, 800);
-        return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (score ${h.score.toFixed(3)}):\n${snippet}`;
-    })
+            const snippet = (h.payload.code ?? "").slice(0, 800);
+            return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (score ${h.score.toFixed(3)}):\n${snippet}`;
+        })
         .join("\n\n---\n\n");
     // ── 4. LLM answers with retrieved context (RAG) ───────────────────────────
     onProgress?.(`Asking AI with context from ${uniqueFiles.length} file${uniqueFiles.length !== 1 ? "s" : ""}...`);
@@ -355,7 +434,8 @@ async function queryCodebase(question, onProgress) {
         "Look at imports, variable names, config values, and initialization code to infer the answer — " +
         "do not require an explicit label; infer from usage patterns. " +
         "Identify the single most relevant block index (N). " +
-        'Respond ONLY with valid JSON — no markdown: {"answer": "...", "topIndex": N}';
+        'Respond ONLY with valid JSON — no markdown: {"answer": "...", "topIndex": N}' +
+        (language !== "en" ? ` Respond in ${language}.` : "");
     const raw = await callLLM(systemPrompt, `Context:\n${context}\n\nQuestion: ${question}`, 400);
     const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
     const jsonMatch = clean.match(/\{[\s\S]*\}/);
@@ -377,7 +457,7 @@ async function queryCodebase(question, onProgress) {
 // ---------------------------------------------------------------------------
 // Deep Dive
 // ---------------------------------------------------------------------------
-async function fetchDeepDiveNarrations(block) {
+async function fetchDeepDiveNarrations(block, language = "en") {
     const lineCount = block.code.split("\n").length;
     const targetChunks = Math.min(lineCount, 8);
     const systemPrompt = "You are a senior developer doing a live pair-programming session, walking a junior colleague through code. " +
@@ -395,9 +475,21 @@ async function fetchDeepDiveNarrations(block) {
     const parsed = JSON.parse(arrMatch[0]);
     if (!Array.isArray(parsed))
         throw new Error("Deep dive: response is not an array");
-    return parsed
+    const narrations = parsed
         .filter((s) => typeof s === "string" && s.trim().length > 0)
         .map(sanitise)
         .filter(s => s.length > 0);
+    if (language === "en")
+        return narrations;
+    const cfg = getConfig();
+    return Promise.all(narrations.map(async (n) => {
+        try {
+            return await translateText(n, language, cfg.sarvamApiKey);
+        }
+        catch (err) {
+            console.warn(`[translate → ${language}] deep-dive chunk failed: ${err instanceof Error ? err.message : err}`);
+            return n;
+        }
+    }));
 }
 //# sourceMappingURL=narrate.js.map

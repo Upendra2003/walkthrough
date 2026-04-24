@@ -105,7 +105,7 @@ class GraphPanel {
         const videoRoot = wsRoot
             ? vscode.Uri.file(path.join(wsRoot, ".vscode", "walkthrough-videos"))
             : undefined;
-        this.panel = vscode.window.createWebviewPanel("walkthroughGraph", "Walkthrough — Codebase Map", { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true }, {
+        this.panel = vscode.window.createWebviewPanel("walkthroughGraph", "Walkthrough — Codebase Map", { viewColumn: vscode.ViewColumn.One }, {
             enableScripts: true,
             retainContextWhenHidden: true,
             localResourceRoots: videoRoot ? [assetsUri, videoRoot] : [assetsUri],
@@ -156,7 +156,7 @@ class GraphPanel {
     onControl(cb) { this.controlCallback = cb; }
     reveal() {
         if (!this.disposed)
-            this.panel.reveal(vscode.ViewColumn.Beside, true);
+            this.panel.reveal(vscode.ViewColumn.One);
     }
     dispose() {
         if (!this.disposed)

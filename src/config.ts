@@ -49,6 +49,7 @@ export interface WalkthroughConfig {
   sarvamApiKey:      string;   // Sarvam TTS key
   customBaseUrl:     string;   // only for provider === "custom"
   embeddingProvider: EmbeddingProvider;
+  language:          string;   // 'en' | 'hi' | 'kn' | 'te'
 }
 
 // ── Secret + setting keys ─────────────────────────────────────────────────────
@@ -58,6 +59,7 @@ const S_SARVAM_KEY    = "walkthrough.sarvamApiKey";
 const CFG_PROVIDER    = "walkthrough.provider";
 const CFG_MODEL       = "walkthrough.model";
 const CFG_CUSTOM      = "walkthrough.customBaseUrl";
+const CFG_LANGUAGE    = "walkthrough.language";
 
 // ── Manager ───────────────────────────────────────────────────────────────────
 
@@ -72,11 +74,13 @@ export class ConfigManager {
     const provider   = cfg.get<LLMProvider>(CFG_PROVIDER, "groq");
     const model      = cfg.get<string>(CFG_MODEL, "qwen/qwen3-32b");
     const customBase = cfg.get<string>(CFG_CUSTOM, "");
+    const language   = cfg.get<string>(CFG_LANGUAGE, "en");
 
     return {
       provider, model, apiKey, sarvamApiKey: sarvamKey,
       customBaseUrl: customBase,
       embeddingProvider: "local",
+      language,
     };
   }
 
@@ -88,6 +92,7 @@ export class ConfigManager {
     await cfg.update(CFG_PROVIDER, config.provider,      vscode.ConfigurationTarget.Global);
     await cfg.update(CFG_MODEL,    config.model,         vscode.ConfigurationTarget.Global);
     await cfg.update(CFG_CUSTOM,   config.customBaseUrl, vscode.ConfigurationTarget.Global);
+    await cfg.update(CFG_LANGUAGE, config.language,      vscode.ConfigurationTarget.Global);
   }
 
   /**

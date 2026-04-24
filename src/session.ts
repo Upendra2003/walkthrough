@@ -93,6 +93,9 @@ export class WalkthroughSession {
   private panel?:    VideoPanel;
   private cfg?:      WalkthroughConfig;
 
+  // ── Language ───────────────────────────────────────────────────────────────
+  private currentLanguage: string = 'en';
+
   // ── Deep Dive flowchart mode ───────────────────────────────────────────────
   private mode: 'video' | 'deepdive' = 'video';
   private currentDeepDiveIndex: number = 0;
@@ -138,6 +141,7 @@ export class WalkthroughSession {
     this.filePath = videoOpts?.filePath;
     this.panel    = videoOpts?.panel;
     this.cfg      = videoOpts?.cfg;
+    this.currentLanguage = videoOpts?.cfg?.language ?? 'en';
 
     this.log                 = callbacks.log;
     this.setStatus           = callbacks.setStatus;
@@ -327,7 +331,7 @@ export class WalkthroughSession {
     };
 
     try {
-      const { answer, topLabel, topFile } = await queryCodebase(question, showProgress);
+      const { answer, topLabel, topFile } = await queryCodebase(question, showProgress, this.currentLanguage);
 
       this.log(`[Q&A] Answer: ${answer}`);
       this.log(`[Q&A] Top match: ${topLabel}${topFile ? ` (${topFile})` : ""}`);
@@ -348,7 +352,7 @@ export class WalkthroughSession {
       this.setStatus("$(megaphone) Q&A — speaking answer...");
 
       try {
-        const audio = await generateAudio(answer);
+        const audio = await generateAudio(answer, this.currentLanguage);
         if (!this.stopped) {
           const qaWords      = answer.trim().split(/\s+/).filter(Boolean);
           const qaIntervalMs = this.estimateWordIntervalMs(audio, qaWords.length);
@@ -420,6 +424,12 @@ export class WalkthroughSession {
     }
   }
 
+  setLanguage(code: string): void {
+    if (this.currentLanguage === code) return;
+    this.currentLanguage = code;
+    vscode.window.showInformationMessage("Language will change from the next block.");
+  }
+
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
@@ -439,6 +449,7 @@ export class WalkthroughSession {
 
   private kickPrefetch(i: number): void {
     if (i < 0 || i >= this.blocks.length || this.prefetchCache.has(i)) return;
+    if (this.currentLanguage !== 'en') return;
     this.prefetchCache.set(i, this.fetchAudio(i));
   }
 
@@ -510,15 +521,15 @@ export class WalkthroughSession {
     const tag = `[${i + 1}/${this.blocks.length}] ${label}`;
 
     try {
-      this.log(`${tag} → fetching narration...`);
+      this.log(`${tag} → fetching narration (lang: ${this.currentLanguage})...`);
       const ctx  = (i === 0 && this.fileContext) ? this.fileContext : undefined;
-      const text = await fetchNarration(label, code, ctx);
+      const text = await fetchNarration(label, code, ctx, this.currentLanguage);
       this.narrationCache.set(i, text);
       this.log(`${tag} → narration ready`);
       this.log(`[script] ${tag}:\n${text}`);
 
-      this.log(`${tag} → generating audio...`);
-      const buf = await generateAudio(text);
+      this.log(`${tag} → generating audio (lang: ${this.currentLanguage})...`);
+      const buf = await generateAudio(text, this.currentLanguage);
       this.log(`${tag} → audio ready (${(buf.length / 1024).toFixed(1)} KB)`);
       return buf;
     } catch (e) {
@@ -540,8 +551,9 @@ export class WalkthroughSession {
 
     // ── Step 1: Get audio ─────────────────────────────────────────────────────
     // Use cached promise from kickPrefetch/prefetchNextBlock, or fetch inline.
+    // For non-English: always generate fresh (no cache read/write).
     let audio: Buffer | null;
-    const cachedAudio = this.prefetchCache.get(i);
+    const cachedAudio = this.currentLanguage === 'en' ? this.prefetchCache.get(i) : undefined;
     this.log(`[presentBlock ${i}] audio cache hit=${!!cachedAudio}`);
     if (cachedAudio) {
       audio = await cachedAudio;
@@ -665,6 +677,7 @@ export class WalkthroughSession {
   // ── Prefetch next block in background ─────────────────────────────────────
 
   private async prefetchNextBlock(blockIndex: number): Promise<void> {
+    if (this.currentLanguage !== 'en') return; // no prefetch for non-English
     if (this.videoCacheMap.has(blockIndex)) return;
     if (!this.wsRoot || !this.filePath || !this.cfg) return;
     if (blockIndex >= this.blocks.length) return;
@@ -675,11 +688,11 @@ export class WalkthroughSession {
     const videoPromise = (async (): Promise<string> => {
       try {
         const ctx       = (blockIndex === 0 && this.fileContext) ? this.fileContext : undefined;
-        const narration = await fetchNarration(block.label, block.code, ctx);
+        const narration = await fetchNarration(block.label, block.code, ctx, 'en');
         this.narrationCache.set(blockIndex, narration);
         this.log(`[script] [${blockIndex + 1}/${this.blocks.length}] ${block.label}:\n${narration}`);
 
-        const audio = await generateAudio(narration);
+        const audio = await generateAudio(narration, 'en');
         // Cache audio so presentBlock can use it without re-generating.
         this.prefetchCache.set(blockIndex, Promise.resolve(audio));
 
@@ -720,7 +733,7 @@ export class WalkthroughSession {
 
     let narrations: string[];
     try {
-      narrations = await fetchDeepDiveNarrations(block);
+      narrations = await fetchDeepDiveNarrations(block, this.currentLanguage);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
       this.log(`${ddTag} → ERROR: ${msg}`);
@@ -760,7 +773,7 @@ export class WalkthroughSession {
       this.log(`${chunkTag}: "${narrations[j]}"`);
 
       try {
-        const audio = await generateAudio(narrations[j]);
+        const audio = await generateAudio(narrations[j], this.currentLanguage);
         if (this.stopped) break;
         await this.playWithControls(audio, narrations[j]);
       } catch (e) {
@@ -1023,7 +1036,7 @@ export class WalkthroughSession {
 
     if (!result) {
       try {
-        result = await generateFlowchart(block.code, block.label, langId, cfg);
+        result = await generateFlowchart(block.code, block.label, langId, cfg, this.currentLanguage);
         this.flowchartCache.set(index, result);
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
@@ -1056,7 +1069,7 @@ export class WalkthroughSession {
     const langId = this.editor.document.languageId;
     const cfg = this.cfg ?? {} as WalkthroughConfig;
 
-    const p = generateFlowchart(block.code, block.label, langId, cfg)
+    const p = generateFlowchart(block.code, block.label, langId, cfg, this.currentLanguage)
       .then(r => { this.flowchartCache.set(index, r); return r; })
       .catch((): FlowchartResult => ({ mermaid: '', explanations: {} }));
 
@@ -1090,10 +1103,11 @@ export class WalkthroughSession {
     if (index < 0 || index >= this.blocks.length) return;
     const block = this.blocks[index];
     try {
-      const narration = this.narrationCache.get(index)
-        ?? await fetchNarration(block.label, block.code);
+      // Always fetch fresh narration for non-English — cached entry may be stale language
+      const narration = (this.currentLanguage === 'en' ? this.narrationCache.get(index) : undefined)
+        ?? await fetchNarration(block.label, block.code, undefined, this.currentLanguage);
       this.narrationCache.set(index, narration);
-      const audio = await generateAudio(narration);
+      const audio = await generateAudio(narration, this.currentLanguage);
       this.panel?.postMessage({ type: 'deepdive-audio-ready' });
       if (!this.stopped) {
         const words          = narration.trim().split(/\s+/).filter(Boolean);

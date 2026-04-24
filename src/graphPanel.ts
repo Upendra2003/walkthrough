@@ -87,7 +87,7 @@ export class GraphPanel {
     this.panel = vscode.window.createWebviewPanel(
       "walkthroughGraph",
       "Walkthrough — Codebase Map",
-      { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
+      { viewColumn: vscode.ViewColumn.One },
       {
         enableScripts: true,
         retainContextWhenHidden: true,
@@ -157,7 +157,7 @@ export class GraphPanel {
   onControl(cb: (action: string) => void): void  { this.controlCallback = cb; }
 
   reveal(): void {
-    if (!this.disposed) this.panel.reveal(vscode.ViewColumn.Beside, true);
+    if (!this.disposed) this.panel.reveal(vscode.ViewColumn.One);
   }
 
   dispose(): void {

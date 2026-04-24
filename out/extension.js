@@ -200,8 +200,12 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
         return;
     }
     // ── Open / update KG panel ────────────────────────────────────────────────
-    activeGraphPanel?.dispose();
-    activeGraphPanel = new graphPanel_1.GraphPanel(extensionContext, graph);
+    if (activeGraphPanel) {
+        activeGraphPanel.update(graph.root);
+    }
+    else {
+        activeGraphPanel = new graphPanel_1.GraphPanel(extensionContext, graph);
+    }
     activeGraphPanel.onNodeClick(async (filePath) => {
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
@@ -219,9 +223,13 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
                 audioPlayer_1.AudioPlayer.volume = Math.max(0, Math.min(100, level));
             return;
         }
-        // Language selection — log for now; future TTS routing hooks in here
+        // Language selection — update active session AND carry into future sessions
         if (action.startsWith("lang-")) {
-            log(`[lang] Subtitle language changed to: ${action.slice(5)}`);
+            const code = action.slice(5);
+            log(`[lang] Language changed to: ${code}`);
+            activeSession?.setLanguage(code);
+            if (sessionCfg)
+                sessionCfg.language = code; // new sessions start in this language
             return;
         }
         // Flowchart deep dive controls
@@ -290,7 +298,7 @@ async function runMultiFileWalkthrough(extensionContext, rootUri, rootFileContex
         let editor;
         try {
             const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(node.file));
-            editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+            editor = await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
         }
         catch (e) {
             log(`[graph] Cannot open ${node.relativePath}: ${e}`);
@@ -585,6 +593,11 @@ async function runIndexingWithUI(wsRoot, cfg) {
                 words: line1.split(/\s+/).filter(Boolean),
                 activeIndex: -1,
             });
+            // Notify user that vectors are ready
+            const notifMsg = result.indexed > 0
+                ? `✅  ${result.indexed} code block(s) converted to vectors and stored in Qdrant DB.`
+                : `✅  All ${result.skipped} code block(s) already indexed in Qdrant DB — knowledge base up to date.`;
+            vscode.window.showInformationMessage(notifMsg);
             await delay(2200);
             const line2 = "🎬  The stage is set.  Lights, camera...  action!";
             activeGraphPanel?.postMessage({
@@ -652,13 +665,34 @@ function activate(context) {
         multiFileStop = true;
         activeSession?.stop();
         activeSession = null;
+        activeGraphPanel?.dispose();
+        activeGraphPanel = null;
         outputChannel.clear();
         outputChannel.show(true);
         log("=== Walkthrough triggered ===");
+        // ── Open panel immediately — full-width tab, no split ─────────────────────
+        {
+            const earlyWsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? "";
+            const placeholderRoot = {
+                id: "loading",
+                file: earlyWsRoot || "loading",
+                relativePath: "⏳  Scanning codebase...",
+                language: "typescript",
+                children: [],
+                status: "pending",
+                depth: 0,
+            };
+            activeGraphPanel = new graphPanel_1.GraphPanel(context, {
+                root: placeholderRoot,
+                nodeMap: new Map([["loading", placeholderRoot]]),
+            });
+        }
         // ── Model picker — user selects provider + model before every session ────
         const picked = await showModelPicker();
         if (!picked) {
             // User pressed Esc or opened Configure — don't start
+            activeGraphPanel?.dispose();
+            activeGraphPanel = null;
             setRunning(false);
             return;
         }
@@ -718,7 +752,7 @@ function activate(context) {
             log(`🎯 Entry point detected: ${path.basename(mainFile)}`);
             const mainUri = vscode.Uri.file(mainFile);
             const doc = await vscode.workspace.openTextDocument(mainUri);
-            await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One });
+            await vscode.window.showTextDocument(doc, { viewColumn: vscode.ViewColumn.One, preserveFocus: true });
             await runMultiFileWalkthrough(context, mainUri, undefined, sessionConfig);
         }
         finally {

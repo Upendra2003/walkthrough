@@ -144,13 +144,18 @@ export async function generateFlowchart(
   code: string,
   blockLabel: string,
   language: string,
-  _cfg: WalkthroughConfig
+  _cfg: WalkthroughConfig,
+  explanationLang = "en"
 ): Promise<FlowchartResult> {
+  const langInstruction = explanationLang !== "en"
+    ? `\nReturn all explanation values in ${explanationLang}. Node IDs must remain in English.`
+    : "";
+
   const user =
     `Block: ${blockLabel}\nLanguage: ${language}\n\n` +
     `Code:\n${code.slice(0, 1400)}`;
 
-  const raw = await callLLM(SYSTEM_PROMPT, user, 2200);
+  const raw = await callLLM(SYSTEM_PROMPT + langInstruction, user, 2200);
 
   // Strip think tags and fences
   const stripped = raw

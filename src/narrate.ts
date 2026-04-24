@@ -52,6 +52,7 @@ function getConfig(): WalkthroughConfig {
     sarvamApiKey: process.env.SARVAM_API_KEY ?? "",
     customBaseUrl: "",
     embeddingProvider: "local",
+    language: "en",
   };
 }
 
@@ -207,6 +208,77 @@ async function callAnthropic(
 }
 
 // ---------------------------------------------------------------------------
+// Sarvam language codes
+// ---------------------------------------------------------------------------
+
+const SARVAM_LANG_CODES: Record<string, string> = {
+  en: "en-IN", hi: "hi-IN", kn: "kn-IN", te: "te-IN",
+};
+
+// priya is en-IN only; priya works across all Indian languages in bulbul:v3
+const SARVAM_SPEAKERS: Record<string, string> = {
+  en: "priya", hi: "priya", kn: "priya", te: "priya",
+};
+
+// ---------------------------------------------------------------------------
+// Translation via Sarvam
+// ---------------------------------------------------------------------------
+
+export function translateText(text: string, targetLang: string, sarvamApiKey: string): Promise<string> {
+  if (targetLang === "en") return Promise.resolve(text);
+  const key = sarvamApiKey || process.env.SARVAM_API_KEY || "";
+  const targetCode = SARVAM_LANG_CODES[targetLang] ?? targetLang;
+
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({
+      input: text,
+      source_language_code: "en-IN",
+      target_language_code: targetCode,
+      speaker_gender: "Female",
+      mode: "formal",
+      model: "mayura:v1",
+      enable_preprocessing: false,
+    });
+
+    const req = https.request(
+      {
+        hostname: "api.sarvam.ai",
+        path: "/translate",
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          "api-subscription-key": key,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString("utf8");
+          let json: Record<string, unknown>;
+          try { json = JSON.parse(raw); }
+          catch {
+            reject(new Error(`Sarvam translate non-JSON (HTTP ${res.statusCode}): ${raw.slice(0, 200)}`));
+            return;
+          }
+          if (res.statusCode !== 200) {
+            reject(new Error(`Sarvam translate HTTP ${res.statusCode}: ${JSON.stringify(json)}`));
+            return;
+          }
+          resolve((json.translated_text as string | undefined) ?? text);
+        });
+        res.on("error", reject);
+      }
+    );
+
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+// ---------------------------------------------------------------------------
 // Narration
 // ---------------------------------------------------------------------------
 
@@ -226,7 +298,8 @@ function sanitise(text: string): string {
 export async function fetchNarration(
   label: string,
   code: string,
-  fileContext?: string
+  fileContext?: string,
+  language = "en"
 ): Promise<string> {
   const userContent = fileContext
     ? `Context: ${fileContext}\n\nBlock: ${label}\n\n${code}`
@@ -234,7 +307,19 @@ export async function fetchNarration(
 
   const raw = await callLLM(SYSTEM_PROMPT, userContent, 200);
   const clean = sanitise(raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim());
-  return clean || label;
+  const narration = clean || label;
+
+  if (language === "en") return narration;
+
+  const cfg = getConfig();
+  try {
+    const translated = await translateText(narration, language, cfg.sarvamApiKey);
+    return translated;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[translate → ${language}] FAILED (${msg}) — using English`);
+    return narration;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -249,16 +334,18 @@ function truncateForTTS(text: string): string {
   return (cut > 0 ? text.slice(0, cut) : text.slice(0, SARVAM_MAX_CHARS)) + '…';
 }
 
-export function generateAudio(text: string): Promise<Buffer> {
+export function generateAudio(text: string, language = "en"): Promise<Buffer> {
   const cfg = getConfig();
   const key = cfg.sarvamApiKey || process.env.SARVAM_API_KEY || "";
   const ttsText = truncateForTTS(text);
+  const targetLangCode = SARVAM_LANG_CODES[language] ?? "en-IN";
+  const speaker = SARVAM_SPEAKERS[language] ?? "priya";
 
   return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       inputs: [ttsText],
-      target_language_code: "en-IN",
-      speaker: "priya",
+      target_language_code: targetLangCode,
+      speaker,
       model: "bulbul:v3",
       enable_preprocessing: true,
     });
@@ -358,7 +445,8 @@ function makeQdrantRequest(method: string, urlPath: string, body?: object): Prom
 
 export async function queryCodebase(
   question: string,
-  onProgress?: (msg: string) => void
+  onProgress?: (msg: string) => void,
+  language = "en"
 ): Promise<{ answer: string; topLabel: string; topFile: string }> {
   const cfg = getConfig();
 
@@ -410,7 +498,8 @@ export async function queryCodebase(
     "Look at imports, variable names, config values, and initialization code to infer the answer — " +
     "do not require an explicit label; infer from usage patterns. " +
     "Identify the single most relevant block index (N). " +
-    'Respond ONLY with valid JSON — no markdown: {"answer": "...", "topIndex": N}';
+    'Respond ONLY with valid JSON — no markdown: {"answer": "...", "topIndex": N}' +
+    (language !== "en" ? ` Respond in ${language}.` : "");
 
   const raw = await callLLM(systemPrompt, `Context:\n${context}\n\nQuestion: ${question}`, 400);
   const clean = raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
@@ -433,7 +522,7 @@ export async function queryCodebase(
 // Deep Dive
 // ---------------------------------------------------------------------------
 
-export async function fetchDeepDiveNarrations(block: SemanticBlock): Promise<string[]> {
+export async function fetchDeepDiveNarrations(block: SemanticBlock, language = "en"): Promise<string[]> {
   const lineCount = block.code.split("\n").length;
   const targetChunks = Math.min(lineCount, 8);
 
@@ -455,8 +544,21 @@ export async function fetchDeepDiveNarrations(block: SemanticBlock): Promise<str
   const parsed: unknown = JSON.parse(arrMatch[0]);
   if (!Array.isArray(parsed)) throw new Error("Deep dive: response is not an array");
 
-  return (parsed as unknown[])
+  const narrations = (parsed as unknown[])
     .filter((s): s is string => typeof s === "string" && s.trim().length > 0)
     .map(sanitise)
     .filter(s => s.length > 0);
+
+  if (language === "en") return narrations;
+
+  const cfg = getConfig();
+  return Promise.all(
+    narrations.map(async (n) => {
+      try { return await translateText(n, language, cfg.sarvamApiKey); }
+      catch (err) {
+        console.warn(`[translate → ${language}] deep-dive chunk failed: ${err instanceof Error ? err.message : err}`);
+        return n;
+      }
+    })
+  );
 }

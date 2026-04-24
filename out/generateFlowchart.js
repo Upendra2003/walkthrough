@@ -135,10 +135,13 @@ Example:
     "rejectNode": "Sends back a 401 Unauthorized response when credentials are wrong. No token is issued."
   }
 }`;
-async function generateFlowchart(code, blockLabel, language, _cfg) {
+async function generateFlowchart(code, blockLabel, language, _cfg, explanationLang = "en") {
+    const langInstruction = explanationLang !== "en"
+        ? `\nReturn all explanation values in ${explanationLang}. Node IDs must remain in English.`
+        : "";
     const user = `Block: ${blockLabel}\nLanguage: ${language}\n\n` +
         `Code:\n${code.slice(0, 1400)}`;
-    const raw = await (0, narrate_1.callLLM)(SYSTEM_PROMPT, user, 2200);
+    const raw = await (0, narrate_1.callLLM)(SYSTEM_PROMPT + langInstruction, user, 2200);
     // Strip think tags and fences
     const stripped = raw
         .replace(/<think>[\s\S]*?<\/think>/gi, '')

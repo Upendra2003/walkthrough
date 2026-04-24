@@ -69,6 +69,7 @@ const S_SARVAM_KEY = "walkthrough.sarvamApiKey";
 const CFG_PROVIDER = "walkthrough.provider";
 const CFG_MODEL = "walkthrough.model";
 const CFG_CUSTOM = "walkthrough.customBaseUrl";
+const CFG_LANGUAGE = "walkthrough.language";
 // ── Manager ───────────────────────────────────────────────────────────────────
 class ConfigManager {
     constructor(secrets) {
@@ -81,10 +82,12 @@ class ConfigManager {
         const provider = cfg.get(CFG_PROVIDER, "groq");
         const model = cfg.get(CFG_MODEL, "qwen/qwen3-32b");
         const customBase = cfg.get(CFG_CUSTOM, "");
+        const language = cfg.get(CFG_LANGUAGE, "en");
         return {
             provider, model, apiKey, sarvamApiKey: sarvamKey,
             customBaseUrl: customBase,
             embeddingProvider: "local",
+            language,
         };
     }
     async saveConfig(config) {
@@ -94,6 +97,7 @@ class ConfigManager {
         await cfg.update(CFG_PROVIDER, config.provider, vscode.ConfigurationTarget.Global);
         await cfg.update(CFG_MODEL, config.model, vscode.ConfigurationTarget.Global);
         await cfg.update(CFG_CUSTOM, config.customBaseUrl, vscode.ConfigurationTarget.Global);
+        await cfg.update(CFG_LANGUAGE, config.language, vscode.ConfigurationTarget.Global);
     }
     /**
      * Returns true if both an LLM key and a Sarvam key are available
