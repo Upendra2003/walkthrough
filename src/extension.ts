@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import * as dns from "dns";
 import { parseBlocks, filterImportantBlocks } from "./parser";
 import { buildImportGraph, flattenDFS, ImportGraph, detectMainFile } from "./graph";
 import { GraphPanel } from "./graphPanel";
@@ -221,6 +222,19 @@ async function runMultiFileWalkthrough(
     // Language selection — log for now; future TTS routing hooks in here
     if (action.startsWith("lang-")) {
       log(`[lang] Subtitle language changed to: ${action.slice(5)}`);
+      return;
+    }
+    // Flowchart deep dive controls
+    if (action === "flowchart-next") { activeSession?.next(); return; }
+    if (action === "flowchart-prev") { activeSession?.prev(); return; }
+    if (action.startsWith("flowchart-generate-audio:")) {
+      const idx = parseInt(action.slice("flowchart-generate-audio:".length), 10);
+      if (!isNaN(idx)) activeSession?.generateDeepDiveAudio(idx);
+      return;
+    }
+    if (action === "next-file") {
+      activeSession?.exitDeepDive?.();
+      activeSession?.skipFile();
       return;
     }
     switch (action) {
@@ -650,6 +664,20 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+function apiHostname(cfg: WalkthroughConfig): string {
+  if (cfg.provider === 'groq')      return 'api.groq.com';
+  if (cfg.provider === 'openai')    return 'api.openai.com';
+  if (cfg.provider === 'anthropic') return 'api.anthropic.com';
+  if (cfg.customBaseUrl) {
+    try { return new URL(cfg.customBaseUrl).hostname; } catch { /* ignore */ }
+  }
+  return 'api.groq.com';
+}
+
+function checkConnectivity(hostname: string): Promise<boolean> {
+  return new Promise(resolve => dns.resolve(hostname, err => resolve(!err)));
+}
+
 // ---------------------------------------------------------------------------
 // activate
 // ---------------------------------------------------------------------------
@@ -713,6 +741,23 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     setActiveConfig(sessionConfig);
     log(`[config] Session: ${picked.provider} · ${picked.model}`);
+
+    // ── Connectivity check — fail fast with a clear error ────────────────────
+    const host = apiHostname(sessionConfig);
+    log(`[network] Checking connectivity to ${host}...`);
+    const online = await checkConnectivity(host);
+    if (!online) {
+      log(`[network] ENOTFOUND ${host} — no internet or DNS failure`);
+      vscode.window.showErrorMessage(
+        `Walkthrough: Cannot reach ${host}. Check your internet connection and try again.`,
+        "Retry"
+      ).then(choice => {
+        if (choice === "Retry") vscode.commands.executeCommand("walkthrough.explain");
+      });
+      setRunning(false);
+      return;
+    }
+    log(`[network] ${host} reachable ✓`);
 
     // ── Indexing (builds/updates Qdrant vector store) ────────────────────────
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;

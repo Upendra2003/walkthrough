@@ -8,7 +8,9 @@
       "Bash(npx knip *)",
       "Bash(npx depcheck *)",
       "Bash(npx ts-prune *)",
-      "Bash(npx tsc *)"
+      "Bash(npx tsc *)",
+      "WebFetch(domain:mermaid.js.org)",
+      "WebFetch(domain:raw.githubusercontent.com)"
     ]
   }
 }

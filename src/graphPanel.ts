@@ -191,7 +191,8 @@ function buildHtml(root: FileNode, cspSource: string, icons: IconSet): string {
 <head>
 <meta charset="UTF-8">
 <meta http-equiv="Content-Security-Policy"
-      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline'; img-src ${cspSource}; media-src ${cspSource};">
+      content="default-src 'none'; font-src https://fonts.gstatic.com; style-src 'unsafe-inline' https://fonts.googleapis.com; script-src 'unsafe-inline' https://cdn.jsdelivr.net; img-src ${cspSource} data:; media-src ${cspSource};">
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Source+Sans+3:ital,wght@0,200..900;1,200..900&display=swap');
 @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Devanagari:wght@400;500&display=swap');
@@ -647,6 +648,252 @@ body {
   transition: color 0.12s, background 0.12s;
 }
 .ctrl-stop:hover { color: rgba(220,70,70,0.9); background: rgba(220,70,70,0.1); }
+
+/* ════ Flowchart zone ════ */
+#flowchart-zone {
+  display: none;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  width: 100%;
+  background: #0a0a0f;
+  position: relative;
+}
+
+#flowchart-header {
+  flex-shrink: 0;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  background: rgba(0,0,0,0.35);
+}
+#flowchart-block-label {
+  flex: 1;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #818cf8;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#flowchart-progress {
+  font-size: 11px;
+  color: rgba(255,255,255,0.3);
+  flex-shrink: 0;
+}
+#flowchart-mode-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #818cf8;
+  background: rgba(99,102,241,0.15);
+  border: 1px solid rgba(99,102,241,0.3);
+  border-radius: 4px;
+  padding: 2px 7px;
+  flex-shrink: 0;
+}
+
+#flowchart-canvas {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
+  position: relative;
+  cursor: grab;
+  background: #0a0a0f;
+}
+#flowchart-canvas:active { cursor: grabbing; }
+#flowchart-canvas svg { display: block; transform-origin: 0 0; }
+
+#flowchart-loading-overlay {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  background: #0a0a0f;
+  z-index: 10;
+  color: rgba(255,255,255,0.5);
+  font-size: 13px;
+  font-style: italic;
+}
+#flowchart-loading-overlay.visible { display: flex; }
+@keyframes fcPulse { 0%,100%{opacity:.25} 50%{opacity:1} }
+#flowchart-loading-overlay span { animation: fcPulse 1.6s ease infinite; color: #818cf8; }
+
+#flowchart-error {
+  display: none;
+  position: absolute;
+  bottom: 8px;
+  left: 14px;
+  right: 14px;
+  font-size: 11px;
+  color: #ef4444;
+  background: rgba(239,68,68,0.1);
+  border: 1px solid rgba(239,68,68,0.25);
+  border-radius: 5px;
+  padding: 6px 10px;
+  z-index: 20;
+}
+
+#fc-reset-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  background: rgba(0,0,0,0.55);
+  border: 1px solid rgba(255,255,255,0.15);
+  border-radius: 5px;
+  color: rgba(255,255,255,0.7);
+  font-size: 13px;
+  width: 28px; height: 28px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  transition: background 0.12s;
+}
+#fc-reset-btn:hover { background: rgba(0,0,0,0.85); color: white; }
+
+#flowchart-footer {
+  flex-shrink: 0;
+  height: 48px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  gap: 8px;
+  border-top: 1px solid rgba(255,255,255,0.07);
+  background: rgba(0,0,0,0.45);
+}
+#flowchart-footer button {
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.11);
+  border-radius: 5px;
+  color: rgba(255,255,255,0.75);
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  white-space: nowrap;
+}
+#flowchart-footer button:hover { background: rgba(255,255,255,0.13); color: white; }
+#fc-audio-btn {
+  color: #10b981;
+  border-color: rgba(16,185,129,0.3);
+  background: rgba(16,185,129,0.08);
+}
+#fc-audio-btn:hover { background: rgba(16,185,129,0.18); }
+#fc-audio-btn.loading { opacity: 0.55; cursor: wait; }
+#fc-spacer { flex: 1; }
+
+#fc-continue-prompt {
+  display: none;
+  position: absolute;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(16,185,129,0.15);
+  border: 1px solid rgba(16,185,129,0.35);
+  border-radius: 6px;
+  color: #10b981;
+  font-size: 12px;
+  padding: 6px 14px;
+  z-index: 30;
+  animation: fcPulse 2s ease infinite;
+}
+
+/* End-of-file card */
+#fc-end-card {
+  display: none;
+  position: absolute;
+  inset: 0;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  background: #0a0a0f;
+  z-index: 5;
+}
+#fc-end-card.visible { display: flex; }
+#fc-end-card p { color: rgba(255,255,255,0.55); font-size: 14px; }
+#fc-end-card button {
+  background: rgba(255,255,255,0.9);
+  border: none;
+  border-radius: 6px;
+  color: #111;
+  font-family: 'Source Sans 3', sans-serif;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 8px 20px;
+  cursor: pointer;
+}
+
+/* ── Node explanation card ── */
+#fc-explanation-card {
+  position: absolute;
+  bottom: 14px;
+  left: 50%;
+  transform: translateX(-50%) translateY(8px);
+  background: rgba(8, 8, 20, 0.97);
+  border: 1px solid rgba(99,102,241,0.5);
+  border-radius: 12px;
+  padding: 14px 18px 16px;
+  min-width: 260px;
+  max-width: 420px;
+  z-index: 60;
+  display: none;
+  box-shadow: 0 6px 32px rgba(0,0,0,0.75), 0 0 0 1px rgba(99,102,241,0.12);
+  pointer-events: auto;
+}
+#fc-explanation-card.visible {
+  display: block;
+  animation: cardSlideIn 0.18s ease both;
+}
+@keyframes cardSlideIn {
+  from { opacity: 0; transform: translateX(-50%) translateY(18px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+#fc-card-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 9px;
+}
+#fc-card-dot {
+  color: #818cf8;
+  font-size: 9px;
+  flex-shrink: 0;
+}
+#fc-card-label {
+  flex: 1;
+  font-size: 13px;
+  font-weight: 700;
+  color: #a5b4fc;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#fc-card-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,0.3);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+#fc-card-close:hover { color: rgba(255,255,255,0.85); }
+#fc-card-body {
+  font-size: 13px;
+  line-height: 1.65;
+  color: rgba(255,255,255,0.8);
+  margin: 0;
+}
 </style>
 </head>
 <body>
@@ -665,7 +912,37 @@ body {
     <button id="btn-fullscreen" title="Fullscreen">&#x26F6;</button>
   </div>
 
-  <!-- ② Subtitle (no lang tag) -->
+  <!-- ② Flowchart zone — shown instead of video-zone in deep dive mode -->
+  <div id="flowchart-zone">
+    <div id="flowchart-header">
+      <span id="flowchart-mode-badge">DEEP DIVE</span>
+      <span id="flowchart-block-label"></span>
+      <span id="flowchart-progress"></span>
+    </div>
+    <div id="flowchart-canvas">
+      <div id="flowchart-loading-overlay"><span>&#x1F50D; Generating flowchart...</span></div>
+      <div id="flowchart-error"></div>
+      <div id="fc-end-card"><p>End of file</p><button id="fc-next-file-btn">&#x25B6; Next File</button></div>
+      <button id="fc-reset-btn" title="Reset view">&#x21BA;</button>
+      <div id="fc-continue-prompt">&#x25B6; Continue</div>
+      <!-- Node explanation card — shown on node click -->
+      <div id="fc-explanation-card">
+        <div id="fc-card-header">
+          <span id="fc-card-dot">&#x25CF;</span>
+          <span id="fc-card-label"></span>
+          <button id="fc-card-close">&#x2715;</button>
+        </div>
+        <p id="fc-card-body"></p>
+      </div>
+    </div>
+    <div id="flowchart-footer">
+      <button id="fc-audio-btn">&#x1F50A; Generate Audio</button>
+      <span id="fc-spacer"></span>
+      <button id="fc-download-btn">Download &#x2193;</button>
+    </div>
+  </div>
+
+  <!-- ③ Subtitle (no lang tag) -->
   <div id="subtitle-section" class="hidden">
     <div id="subtitle-inner">
       <div id="subtitle-words"></div>
@@ -1060,7 +1337,316 @@ document.getElementById('btn-fullscreen').addEventListener('click', function() {
   }
 });
 
-// Init — mark English as selected by default
+// ── Mermaid init ─────────────────────────────────────────────────────────────
+if (typeof mermaid !== 'undefined') {
+  mermaid.initialize({
+    startOnLoad: false,
+    securityLevel: 'loose',
+    theme: 'dark',
+    flowchart:  { curve: 'basis', padding: 20 },
+    sequence:   { showSequenceNumbers: false, mirrorActors: false },
+    er:         { diagramPadding: 20 },
+    mindmap:    {},
+    themeVariables: {
+      primaryColor:       '#1e1e2e',
+      primaryTextColor:   '#cdd6f4',
+      primaryBorderColor: '#6c7086',
+      lineColor:          '#6c7086',
+      background:         '#1e1e2e',
+      mainBkg:            '#181825',
+      nodeBorder:         '#6c7086',
+      clusterBkg:         '#181825',
+      titleColor:         '#cdd6f4',
+    }
+  });
+}
+
+// ── Flowchart state ───────────────────────────────────────────────────────────
+var fcScale           = 1;
+var fcTransX          = 0;
+var fcTransY          = 0;
+var fcDragging        = false;
+var fcDragStartX      = 0;
+var fcDragStartY      = 0;
+var fcDragOriginX     = 0;
+var fcDragOriginY     = 0;
+var fcCurrentBlock    = 0;
+var currentExplanations = {};  // nodeId/name → explanation text
+
+function fcApplyTransform() {
+  var canvas = document.getElementById('flowchart-canvas');
+  var svg = canvas ? canvas.querySelector('svg') : null;
+  if (svg) {
+    svg.style.transform = 'translate(' + fcTransX + 'px,' + fcTransY + 'px) scale(' + fcScale + ')';
+  }
+}
+
+function fcResetView() {
+  fcScale = 1; fcTransX = 0; fcTransY = 0;
+  fcApplyTransform();
+}
+
+// Wheel zoom
+document.getElementById('flowchart-canvas').addEventListener('wheel', function(e) {
+  e.preventDefault();
+  var delta = e.deltaY > 0 ? 0.9 : 1.1;
+  fcScale = Math.min(3, Math.max(0.3, fcScale * delta));
+  fcApplyTransform();
+}, { passive: false });
+
+// Drag pan
+document.getElementById('flowchart-canvas').addEventListener('mousedown', function(e) {
+  if (e.target.tagName === 'BUTTON') return;
+  fcDragging   = true;
+  fcDragStartX = e.clientX;
+  fcDragStartY = e.clientY;
+  fcDragOriginX = fcTransX;
+  fcDragOriginY = fcTransY;
+});
+document.addEventListener('mousemove', function(e) {
+  if (!fcDragging) return;
+  fcTransX = fcDragOriginX + (e.clientX - fcDragStartX);
+  fcTransY = fcDragOriginY + (e.clientY - fcDragStartY);
+  fcApplyTransform();
+});
+document.addEventListener('mouseup', function() { fcDragging = false; });
+
+// Reset view button
+document.getElementById('fc-reset-btn').addEventListener('click', fcResetView);
+
+document.getElementById('fc-audio-btn').addEventListener('click', function() {
+  this.classList.add('loading');
+  this.textContent = '⏳ Generating...';
+  vscode.postMessage({ type: 'control', action: 'flowchart-generate-audio:' + fcCurrentBlock });
+});
+document.getElementById('fc-download-btn').addEventListener('click', function() {
+  var canvas = document.getElementById('flowchart-canvas');
+  var svg = canvas ? canvas.querySelector('svg') : null;
+  if (!svg) return;
+  var xml = new XMLSerializer().serializeToString(svg);
+  var blob = new Blob([xml], { type: 'image/svg+xml' });
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = 'flowchart-block' + fcCurrentBlock + '-' + Date.now() + '.svg';
+  a.click();
+  URL.revokeObjectURL(url);
+});
+document.getElementById('fc-next-file-btn').addEventListener('click', function() {
+  vscode.postMessage({ type: 'control', action: 'next-file' });
+});
+
+// ── Flowchart message handlers ────────────────────────────────────────────────
+
+function fcShowLoading() {
+  var ov = document.getElementById('flowchart-loading-overlay');
+  if (ov) ov.classList.add('visible');
+  var err = document.getElementById('flowchart-error');
+  if (err) err.style.display = 'none';
+  var end = document.getElementById('fc-end-card');
+  if (end) end.classList.remove('visible');
+  document.getElementById('fc-continue-prompt').style.display = 'none';
+}
+
+function fcHideLoading() {
+  var ov = document.getElementById('flowchart-loading-overlay');
+  if (ov) ov.classList.remove('visible');
+}
+
+async function fcRenderMermaid(mermaidStr, blockLabel, blockIndex, totalBlocks) {
+  fcCurrentBlock = blockIndex;
+  document.getElementById('flowchart-block-label').textContent = blockLabel;
+  document.getElementById('flowchart-progress').textContent =
+    'Block ' + (blockIndex + 1) + ' of ' + totalBlocks;
+
+  var canvas = document.getElementById('flowchart-canvas');
+  // Remove any existing SVG
+  var existing = canvas.querySelector('svg');
+  if (existing) existing.remove();
+
+  try {
+    var result = await mermaid.render('fc-svg-' + Date.now(), mermaidStr);
+    var tmp = document.createElement('div');
+    tmp.innerHTML = result.svg;
+    var svgEl = tmp.querySelector('svg');
+    if (svgEl) {
+      svgEl.style.transformOrigin = '0 0';
+      canvas.appendChild(svgEl);
+      fcResetView();
+      // Attach click handlers AFTER SVG is in the DOM
+      setTimeout(attachNodeClickHandlers, 60);
+    }
+    document.getElementById('flowchart-error').style.display = 'none';
+    document.getElementById('fc-audio-btn').classList.remove('loading');
+    document.getElementById('fc-audio-btn').textContent = '\\uD83D\\uDD0A Generate Audio';
+    hideExplanationCard();
+  } catch (err) {
+    var errEl = document.getElementById('flowchart-error');
+    errEl.textContent = 'Render error: ' + (err && err.message ? err.message : String(err));
+    errEl.style.display = 'block';
+  }
+  fcHideLoading();
+}
+
+// ── Node explanation card ─────────────────────────────────────────────────────
+
+function showExplanationCard(label, explanation) {
+  var card  = document.getElementById('fc-explanation-card');
+  var lbl   = document.getElementById('fc-card-label');
+  var body  = document.getElementById('fc-card-body');
+  if (!card || !lbl || !body) return;
+  lbl.textContent  = label;
+  body.textContent = explanation;
+  card.classList.remove('visible');
+  // Force reflow to restart animation
+  void card.offsetWidth;
+  card.classList.add('visible');
+}
+
+function hideExplanationCard() {
+  var card = document.getElementById('fc-explanation-card');
+  if (card) card.classList.remove('visible');
+}
+
+function extractFlowchartNodeId(svgId) {
+  // "flowchart-startNode-0" or "statediagram-Idle-0"  →  "startNode" / "Idle"
+  var m = svgId.match(/^(?:flowchart|statediagram)-(.+)-\d+$/);
+  return m ? m[1] : svgId;
+}
+
+function getNodeLabel(el) {
+  var candidates = [
+    el.querySelector('.nodeLabel'),
+    el.querySelector('foreignObject span'),
+    el.querySelector('text'),
+    el.querySelector('tspan'),
+  ];
+  for (var i = 0; i < candidates.length; i++) {
+    if (candidates[i] && candidates[i].textContent) {
+      return candidates[i].textContent.replace(/\\s+/g, ' ').trim();
+    }
+  }
+  return '';
+}
+
+function lookupExplanation(nodeId, label) {
+  // Exact key match
+  if (currentExplanations[nodeId]) return currentExplanations[nodeId];
+  if (currentExplanations[label])  return currentExplanations[label];
+  // Case-insensitive match
+  var keys = Object.keys(currentExplanations);
+  for (var i = 0; i < keys.length; i++) {
+    var k = keys[i].toLowerCase();
+    if (k === nodeId.toLowerCase() || k === label.toLowerCase()) {
+      return currentExplanations[keys[i]];
+    }
+  }
+  // Partial match — label contains the key
+  for (var j = 0; j < keys.length; j++) {
+    if (label.toLowerCase().includes(keys[j].toLowerCase())) {
+      return currentExplanations[keys[j]];
+    }
+  }
+  return null;
+}
+
+function handleNodeClick(el, e) {
+  e.stopPropagation();
+  var svgId   = el.id || (el.closest('[id]') ? el.closest('[id]').id : '');
+  var nodeId  = extractFlowchartNodeId(svgId);
+  var label   = getNodeLabel(el) || nodeId;
+  var explanation = lookupExplanation(nodeId, label);
+  if (explanation) {
+    showExplanationCard(label, explanation);
+  }
+}
+
+function attachNodeClickHandlers() {
+  var canvas = document.getElementById('flowchart-canvas');
+  if (!canvas) return;
+
+  // Selectors for all Mermaid v11 diagram types
+  var selectors = [
+    'g.node',                    // flowchart
+    'g.actor',                   // sequenceDiagram
+    'g.classGroup',              // classDiagram
+    '.er.entityBox',             // erDiagram
+    '.mindmap-node',             // mindmap
+    'g.statediagram-state',      // stateDiagram-v2
+    'g[class*="label-container"]', // fallback
+  ];
+
+  selectors.forEach(function(sel) {
+    canvas.querySelectorAll(sel).forEach(function(el) {
+      if (el._fcClickAttached) return;
+      el._fcClickAttached = true;
+      el.style.cursor = 'pointer';
+      // Highlight on hover
+      el.addEventListener('mouseenter', function() {
+        el.style.filter = 'brightness(1.25)';
+      });
+      el.addEventListener('mouseleave', function() {
+        el.style.filter = '';
+      });
+      el.addEventListener('click', function(e) { handleNodeClick(el, e); });
+    });
+  });
+}
+
+// Close card when clicking blank canvas area
+document.getElementById('flowchart-canvas').addEventListener('click', function(e) {
+  var card = document.getElementById('fc-explanation-card');
+  if (card && !card.contains(e.target)) hideExplanationCard();
+});
+
+document.getElementById('fc-card-close').addEventListener('click', function(e) {
+  e.stopPropagation();
+  hideExplanationCard();
+});
+
+// ── Extend message handler ────────────────────────────────────────────────────
+
+var origMsgHandler = null; // we extend below
+
+window.addEventListener('message', function(event) {
+  var data = event.data;
+  switch (data.type) {
+    case 'enter-deepdive':
+      document.body.classList.add('deepdive-active');
+      document.getElementById('video-zone').style.display = 'none';
+      document.getElementById('flowchart-zone').style.display = 'flex';
+      fcShowLoading();
+      break;
+    case 'exit-deepdive':
+      document.body.classList.remove('deepdive-active');
+      document.getElementById('video-zone').style.display = '';
+      document.getElementById('flowchart-zone').style.display = 'none';
+      break;
+    case 'flowchart-loading':
+      fcShowLoading();
+      break;
+    case 'set-flowchart':
+      currentExplanations = data.explanations || {};
+      fcRenderMermaid(data.mermaid, data.blockLabel, data.blockIndex, data.totalBlocks);
+      break;
+    case 'flowchart-end':
+      fcHideLoading();
+      document.getElementById('fc-end-card').classList.add('visible');
+      break;
+    case 'deepdive-audio-ready':
+      // audio is being prepared — nothing to show yet
+      break;
+    case 'deepdive-audio-ended': {
+      var btn = document.getElementById('fc-audio-btn');
+      btn.classList.remove('loading');
+      btn.textContent = '\\uD83D\\uDD0A Generate Audio';
+      document.getElementById('fc-continue-prompt').style.display = 'block';
+      break;
+    }
+  }
+});
+
+// ── Init ──────────────────────────────────────────────────────────────────────
 applyLang('en', '');
 render(INITIAL_TREE);
 </script>

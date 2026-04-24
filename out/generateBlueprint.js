@@ -125,6 +125,26 @@ Return only the JSON object. Start with "{" and end with "}".`;
     const clean = text.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
     const bp = JSON.parse(clean);
     bp.audioDurationMs = audioDurationMs; // always authoritative
+    // Sanitise: replace any scene type the LLM hallucinated with a safe textpop fallback.
+    const VALID = new Set([
+        'textpop', 'flow', 'arrow', 'box', 'tree', 'loop', 'async', 'error-flow',
+        'database', 'api-request', 'json-viewer', 'env-config', 'auth-flow', 'array',
+        'stack', 'conditional', 'pipeline', 'middleware', 'event-emitter', 'success',
+        'timeline', 'compare', 'hashmap', 'stats', 'graph-nodes',
+    ]);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    bp.scenes = (bp.scenes ?? []).map((s) => {
+        if (VALID.has(s.type))
+            return s;
+        console.warn(`[Blueprint] Unknown scene type "${s.type}" — replacing with textpop`);
+        return {
+            type: 'textpop',
+            headline: (s.narrationChunk ?? s.title ?? blockLabel).slice(0, 40),
+            subtext: '',
+            emoji: '📦',
+            narrationChunk: s.narrationChunk ?? '',
+        };
+    });
     return bp;
 }
 //# sourceMappingURL=generateBlueprint.js.map

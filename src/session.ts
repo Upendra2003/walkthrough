@@ -4,6 +4,7 @@ import { fetchNarration, generateAudio, queryCodebase, fetchDeepDiveNarrations }
 import { AudioPlayer } from "./audioPlayer";
 import { renderBlockVideo, clearVideoCache } from "./videoRenderer";
 import { generateBlueprint } from "./generateBlueprint";
+import { generateFlowchart, FlowchartResult } from "./generateFlowchart";
 import type { AnimationBlueprint } from "./blueprintTypes";
 import { WalkthroughConfig } from "./config";
 
@@ -68,8 +69,9 @@ export class WalkthroughSession {
   private currentPlayer: AudioPlayer | null = null;
 
   // ── Deep Dive ──────────────────────────────────────────────────────────────
-  private deepDiveActive  = false;
-  private pendingDeepDive = false;
+  private deepDiveActive     = false;
+  private pendingDeepDive    = false;
+  private deepDiveExitResolve: (() => void) | null = null;
 
   // ── Q&A answer playback ───────────────────────────────────────────────────
   // Separate pause state so Space controls Q&A audio while narration waits.
@@ -90,6 +92,12 @@ export class WalkthroughSession {
   private filePath?: string;
   private panel?:    VideoPanel;
   private cfg?:      WalkthroughConfig;
+
+  // ── Deep Dive flowchart mode ───────────────────────────────────────────────
+  private mode: 'video' | 'deepdive' = 'video';
+  private currentDeepDiveIndex: number = 0;
+  private flowchartCache:    Map<number, FlowchartResult>          = new Map();
+  private flowchartPrefetch: Map<number, Promise<FlowchartResult>> = new Map();
 
   // ── Subtitle animation handle ─────────────────────────────────────────────
   private subtitleStopFn:     (() => number) | null = null;
@@ -234,8 +242,14 @@ export class WalkthroughSession {
     }
   }
 
-  next(): void { this.log("  ⏭  Skip next"); this.sendSignal("next"); }
-  prev(): void { this.log("  ⏮  Skip prev"); this.sendSignal("prev"); }
+  next(): void {
+    if (this.mode === 'deepdive') { void this.nextFlowchartBlock(); return; }
+    this.log("  ⏭  Skip next"); this.sendSignal("next");
+  }
+  prev(): void {
+    if (this.mode === 'deepdive') { void this.prevFlowchartBlock(); return; }
+    this.log("  ⏮  Skip prev"); this.sendSignal("prev");
+  }
 
   skipLine(): void {
     if (this.stopped) return;
@@ -247,26 +261,41 @@ export class WalkthroughSession {
     if (this.stopped) return;
     this.log("  ⏭  Skip file");
     this.fileSkipRequested = true;
+    this.mode = 'video';
+    const r = this.deepDiveExitResolve;
+    this.deepDiveExitResolve = null;
+    r?.();
     this.stop();
   }
 
   deepDive(): void {
-    if (this.stopped || this.deepDiveActive) return;
-    this.log("  🔍  Deep dive");
-    this.pendingDeepDive = true;
+    if (this.stopped) return;
+
+    if (this.mode === 'deepdive') {
+      this.log("  🔍  Exit flowchart deep dive");
+      this.exitDeepDive();
+      return;
+    }
+
+    this.log("  🔍  Enter flowchart deep dive");
+    this.mode = 'deepdive';
+    this.currentDeepDiveIndex = this.index;
+    this.currentPlayer?.stop();
+    void this.enterDeepDive();
 
     if (this.skipResolve) {
+      // Audio was playing — signal next; playWithControls will then check mode
       const r = this.skipResolve;
       this.skipResolve = null;
-      this.currentPlayer?.stop();
       r("next");
     } else if (this.paused) {
+      // Was paused — wake up waitForResume; playWithControls checks mode and returns "next"
       this.paused = false;
-      this.editor.setDecorations(this.qaDecorationType, []);
       const r = this.resumeResolve;
       this.resumeResolve = null;
       r?.();
     }
+    // If during loading phase: presentBlock checks mode after loading completes
   }
 
   async askQuestion(): Promise<void> {
@@ -397,6 +426,9 @@ export class WalkthroughSession {
     const r = this.resumeResolve;
     this.resumeResolve = null;
     r?.();
+    const r2 = this.deepDiveExitResolve;
+    this.deepDiveExitResolve = null;
+    r2?.();
   }
 
   // ── Prefetch ──────────────────────────────────────────────────────────────
@@ -567,25 +599,18 @@ export class WalkthroughSession {
     const narration = this.narrationCache.get(i) ?? "";
 
     // ── Step 3: Handle signals queued during the loading phase ────────────────
-    if (this.pendingDeepDive) {
-      this.pendingDeepDive = false;
-      if (block.level === 0) {
-        this.inBlockMode = true;
-        this.clearSubtitle();
-        return "next";
-      }
-      this.applyBlockDecoration(block);
-      await this.runDeepDive(block, tag);
-      this.editor.setDecorations(this.decorationType, []);
-      this.clearSubtitle();
-      return "next";
-    }
-
     if (this.pendingSkip !== null) {
       const dir = this.pendingSkip;
       this.pendingSkip = null;
       this.clearSubtitle();
       return dir;
+    }
+
+    // D pressed during loading → wait for deep dive to exit before advancing
+    if (this.mode === 'deepdive' && !this.stopped) {
+      this.clearSubtitle();
+      await this.waitForDeepDiveExit();
+      return "next";
     }
 
     this.applyBlockDecoration(block);
@@ -625,18 +650,9 @@ export class WalkthroughSession {
     this.editor.setDecorations(this.decorationType, []);
     this.clearSubtitle();
 
-    if (this.pendingDeepDive && !this.stopped) {
-      this.pendingDeepDive = false;
-      if (block.level === 0) {
-        this.inBlockMode = true;
-        this.clearSubtitle();
-        return "next";
-      }
-      this.applyBlockDecoration(block);
-      await this.runDeepDive(block, tag);
-      this.editor.setDecorations(this.decorationType, []);
-      this.clearSubtitle();
-      return "next";
+    // D pressed during playback → session waits here until user exits deep dive
+    if (this.mode === 'deepdive' && !this.stopped) {
+      await this.waitForDeepDiveExit();
     }
 
     return dir;
@@ -866,8 +882,9 @@ export class WalkthroughSession {
 
     for (;;) {
       await this.waitForResume();
-      if (this.stopped)         return "next";
-      if (this.pendingDeepDive) return "next";
+      if (this.stopped)             return "next";
+      if (this.mode === 'deepdive') return "next";
+      if (this.pendingDeepDive)     return "next";
       if (this.pendingSkip !== null) {
         const dir = this.pendingSkip;
         this.pendingSkip = null;
@@ -967,6 +984,123 @@ export class WalkthroughSession {
     this.hideSubtitle?.();
     this.videoCacheMap.clear();
     this.blueprintCache.clear();
+    this.flowchartCache.clear();
+    this.flowchartPrefetch.clear();
+    this.mode = 'video';
+  }
+
+  // ── Flowchart / Deep Dive methods ─────────────────────────────────────────
+
+  private waitForDeepDiveExit(): Promise<void> {
+    if (this.mode !== 'deepdive') return Promise.resolve();
+    return new Promise(r => { this.deepDiveExitResolve = r; });
+  }
+
+  public async enterDeepDive(): Promise<void> {
+    this.panel?.postMessage({ type: 'enter-deepdive' });
+    await this.showFlowchartBlock(this.currentDeepDiveIndex);
+  }
+
+  private async showFlowchartBlock(index: number): Promise<void> {
+    if (index < 0 || index >= this.blocks.length) return;
+    const block = this.blocks[index];
+    const langId = this.editor.document.languageId;
+    const cfg = this.cfg ?? {} as WalkthroughConfig;
+
+    this.panel?.postMessage({ type: 'flowchart-loading' });
+
+    let result: FlowchartResult | undefined = this.flowchartCache.get(index);
+    if (!result) {
+      const inflight = this.flowchartPrefetch.get(index);
+      if (inflight) {
+        try { result = await inflight; } catch { /* fall through to fresh call */ }
+      }
+    }
+
+    if (!result) {
+      try {
+        result = await generateFlowchart(block.code, block.label, langId, cfg);
+        this.flowchartCache.set(index, result);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        this.log(`[flowchart] block ${index}: ERROR — ${msg}`);
+        result = {
+          mermaid: `flowchart LR\n  errNode["Error generating diagram"]:::error\n  classDef error fill:#ef4444,stroke:#dc2626,color:#fff`,
+          explanations: {},
+        };
+      }
+    }
+
+    this.panel?.postMessage({
+      type: 'set-flowchart',
+      mermaid:      result.mermaid,
+      explanations: result.explanations,
+      blockLabel:   block.label,
+      blockIndex:   index,
+      totalBlocks:  this.blocks.length,
+    });
+
+    void this.prefetchFlowchartBlock(index + 1);
+  }
+
+  private prefetchFlowchartBlock(index: number): void {
+    if (index >= this.blocks.length) return;
+    if (this.flowchartCache.has(index)) return;
+    if (this.flowchartPrefetch.has(index)) return;
+
+    const block = this.blocks[index];
+    const langId = this.editor.document.languageId;
+    const cfg = this.cfg ?? {} as WalkthroughConfig;
+
+    const p = generateFlowchart(block.code, block.label, langId, cfg)
+      .then(r => { this.flowchartCache.set(index, r); return r; })
+      .catch((): FlowchartResult => ({ mermaid: '', explanations: {} }));
+
+    this.flowchartPrefetch.set(index, p);
+  }
+
+  public async nextFlowchartBlock(): Promise<void> {
+    if (this.currentDeepDiveIndex + 1 >= this.blocks.length) {
+      this.panel?.postMessage({ type: 'flowchart-end' });
+      return;
+    }
+    this.currentDeepDiveIndex++;
+    await this.showFlowchartBlock(this.currentDeepDiveIndex);
+  }
+
+  public async prevFlowchartBlock(): Promise<void> {
+    if (this.currentDeepDiveIndex <= 0) return;
+    this.currentDeepDiveIndex--;
+    await this.showFlowchartBlock(this.currentDeepDiveIndex);
+  }
+
+  public exitDeepDive(): void {
+    this.mode = 'video';
+    this.panel?.postMessage({ type: 'exit-deepdive' });
+    const r = this.deepDiveExitResolve;
+    this.deepDiveExitResolve = null;
+    r?.();
+  }
+
+  public async generateDeepDiveAudio(index: number): Promise<void> {
+    if (index < 0 || index >= this.blocks.length) return;
+    const block = this.blocks[index];
+    try {
+      const narration = this.narrationCache.get(index)
+        ?? await fetchNarration(block.label, block.code);
+      this.narrationCache.set(index, narration);
+      const audio = await generateAudio(narration);
+      this.panel?.postMessage({ type: 'deepdive-audio-ready' });
+      if (!this.stopped) {
+        const player = new AudioPlayer();
+        this.currentPlayer = player;
+        await player.play(audio);
+        this.currentPlayer = null;
+        this.panel?.postMessage({ type: 'deepdive-audio-ended' });
+      }
+    } catch (e) {
+      this.log(`[deepdive-audio] ERROR: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 }
 
