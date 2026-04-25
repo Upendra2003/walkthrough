@@ -184,21 +184,27 @@ export async function generateFlowchart(
   const VALID_STARTS = ['flowchart', 'sequenceDiagram', 'stateDiagram-v2',
                         'classDiagram', 'erDiagram', 'mindmap'];
   if (!VALID_STARTS.some(s => mermaid.startsWith(s))) {
-    throw new Error('Invalid Mermaid syntax returned');
+    // Fallback: wrap block label in a minimal flowchart so the panel doesn't crash
+    console.warn(`[Flowchart] Invalid mermaid start — falling back to minimal diagram`);
+    mermaid = `flowchart LR\n  blockNode["${blockLabel.replace(/"/g, "'")}"]\n  class blockNode process\n  classDef process fill:#0ea5e9,stroke:#0284c7,color:#fff`;
   }
 
   return { mermaid, explanations };
 }
 
 function sanitizeMermaid(src: string): string {
-  const trimmed = src.trimStart();
+  // Strip backtick code fences the LLM sometimes embeds inside the JSON string value
+  let trimmed = src.trimStart();
+  if (trimmed.startsWith('```')) {
+    trimmed = trimmed.replace(/^```[a-z]*\s*/i, '').replace(/```\s*$/, '').trimStart();
+  }
   const isSequence = trimmed.startsWith('sequenceDiagram');
   const isClass    = trimmed.startsWith('classDiagram');
   const isER       = trimmed.startsWith('erDiagram');
   const isMindmap  = trimmed.startsWith('mindmap');
   const isState    = trimmed.startsWith('stateDiagram');
 
-  let out = src;
+  let out = trimmed;
 
   // All types: strip pure separator lines and %% comments
   out = out.replace(/^\s*-{4,}\s*$/gm, '');

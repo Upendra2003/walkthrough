@@ -10,24 +10,24 @@
  *
  * Sarvam TTS key is read from activeConfig.sarvamApiKey, with .env as dev fallback.
  */
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function (o, m, k, k2) {
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     var desc = Object.getOwnPropertyDescriptor(m, k);
     if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-        desc = { enumerable: true, get: function () { return m[k]; } };
+      desc = { enumerable: true, get: function() { return m[k]; } };
     }
     Object.defineProperty(o, k2, desc);
-}) : (function (o, m, k, k2) {
+}) : (function(o, m, k, k2) {
     if (k2 === undefined) k2 = k;
     o[k2] = m[k];
 }));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function (o, v) {
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
     Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function (o, v) {
+}) : function(o, v) {
     o["default"] = v;
 });
 var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function (o) {
+    var ownKeys = function(o) {
         ownKeys = Object.getOwnPropertyNames || function (o) {
             var ar = [];
             for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
@@ -374,22 +374,22 @@ function makeQdrantRequest(method, urlPath, body) {
             path: fullUrl.pathname + (fullUrl.search || ""),
             method,
             headers,
-        },
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            (res) => {
-                const chunks = [];
-                res.on("data", (c) => chunks.push(c));
-                res.on("end", () => {
-                    const text = Buffer.concat(chunks).toString("utf8");
-                    try {
-                        resolve(JSON.parse(text));
-                    }
-                    catch {
-                        reject(new Error(`Qdrant non-JSON (HTTP ${res.statusCode}): ${text.slice(0, 200)}`));
-                    }
-                });
-                res.on("error", reject);
+        }, 
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (res) => {
+            const chunks = [];
+            res.on("data", (c) => chunks.push(c));
+            res.on("end", () => {
+                const text = Buffer.concat(chunks).toString("utf8");
+                try {
+                    resolve(JSON.parse(text));
+                }
+                catch {
+                    reject(new Error(`Qdrant non-JSON (HTTP ${res.statusCode}): ${text.slice(0, 200)}`));
+                }
             });
+            res.on("error", reject);
+        });
         req.on("error", reject);
         if (bodyStr)
             req.write(bodyStr);
@@ -424,9 +424,9 @@ async function queryCodebase(question, onProgress, language = "en") {
     // ── 3. Build ranked context for the LLM ──────────────────────────────────
     const context = hits
         .map((h, i) => {
-            const snippet = (h.payload.code ?? "").slice(0, 800);
-            return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (score ${h.score.toFixed(3)}):\n${snippet}`;
-        })
+        const snippet = (h.payload.code ?? "").slice(0, 800);
+        return `[${i}] ${h.payload.label ?? "?"} in ${h.payload.file ?? "?"} (score ${h.score.toFixed(3)}):\n${snippet}`;
+    })
         .join("\n\n---\n\n");
     // ── 4. LLM answers with retrieved context (RAG) ───────────────────────────
     onProgress?.(`Asking AI with context from ${uniqueFiles.length} file${uniqueFiles.length !== 1 ? "s" : ""}...`);

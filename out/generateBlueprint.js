@@ -132,18 +132,58 @@ Return only the JSON object. Start with "{" and end with "}".`;
         'stack', 'conditional', 'pipeline', 'middleware', 'event-emitter', 'success',
         'timeline', 'compare', 'hashmap', 'stats', 'graph-nodes',
     ]);
+    // Coerce an item that should be a plain string — the LLM sometimes returns
+    // {label, isAwait} objects or other object shapes instead of strings.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const toStr = (v) => {
+        if (typeof v === 'string')
+            return v;
+        if (v && typeof v === 'object')
+            return String(v.label ?? v.name ?? v.text ?? v.value ?? JSON.stringify(v));
+        return String(v ?? '');
+    };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     bp.scenes = (bp.scenes ?? []).map((s) => {
-        if (VALID.has(s.type))
-            return s;
-        console.warn(`[Blueprint] Unknown scene type "${s.type}" — replacing with textpop`);
-        return {
-            type: 'textpop',
-            headline: (s.narrationChunk ?? s.title ?? blockLabel).slice(0, 40),
-            subtext: '',
-            emoji: '📦',
-            narrationChunk: s.narrationChunk ?? '',
-        };
+        if (!VALID.has(s.type)) {
+            console.warn(`[Blueprint] Unknown scene type "${s.type}" — replacing with textpop`);
+            return {
+                type: 'textpop',
+                headline: (s.narrationChunk ?? s.title ?? blockLabel).slice(0, 40),
+                subtext: '',
+                emoji: '📦',
+                narrationChunk: s.narrationChunk ?? '',
+            };
+        }
+        // Fix string-array fields where the LLM returned objects instead of strings.
+        if (s.type === 'loop' && Array.isArray(s.body)) {
+            s.body = s.body.map(toStr);
+        }
+        if (s.type === 'error-flow') {
+            if (Array.isArray(s.trySteps))
+                s.trySteps = s.trySteps.map(toStr);
+            if (s.catchAction !== undefined)
+                s.catchAction = toStr(s.catchAction);
+        }
+        if (s.type === 'array' && Array.isArray(s.items)) {
+            s.items = s.items.map(toStr);
+        }
+        if (s.type === 'stack' && Array.isArray(s.items)) {
+            s.items = s.items.map(toStr);
+        }
+        if (s.type === 'conditional') {
+            if (Array.isArray(s.truePath))
+                s.truePath = s.truePath.map(toStr);
+            if (Array.isArray(s.falsePath))
+                s.falsePath = s.falsePath.map(toStr);
+        }
+        if (s.type === 'tree') {
+            if (s.root !== undefined)
+                s.root = toStr(s.root);
+        }
+        if (s.type === 'flow' && Array.isArray(s.steps)) {
+            s.steps = s.steps.map((st) => typeof st === 'string' ? { label: st } : st);
+        }
+        return s;
     });
     return bp;
 }
