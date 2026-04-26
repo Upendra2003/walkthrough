@@ -35,6 +35,7 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.WalkthroughSession = void 0;
 const vscode = __importStar(require("vscode"));
+const path = __importStar(require("path"));
 const narrate_1 = require("./narrate");
 const audioPlayer_1 = require("./audioPlayer");
 const videoRenderer_1 = require("./videoRenderer");
@@ -394,6 +395,13 @@ class WalkthroughSession {
         this.deepDiveExitResolve = null;
         r2?.();
     }
+    // ── Helpers ───────────────────────────────────────────────────────────────
+    /** Returns the current file's path relative to wsRoot, with forward slashes. */
+    relativeFilePath() {
+        if (!this.filePath || !this.wsRoot)
+            return "";
+        return path.relative(this.wsRoot, this.filePath).replace(/\\/g, "/");
+    }
     // ── Prefetch ──────────────────────────────────────────────────────────────
     kickPrefetch(i) {
         if (i < 0 || i >= this.blocks.length || this.prefetchCache.has(i))
@@ -459,7 +467,12 @@ class WalkthroughSession {
         try {
             this.log(`${tag} → fetching narration (lang: ${this.currentLanguage})...`);
             const ctx = (i === 0 && this.fileContext) ? this.fileContext : undefined;
-            const text = await (0, narrate_1.fetchNarration)(label, code, ctx, this.currentLanguage);
+            // Fetch cross-file context (fast Qdrant call) before the LLM narration call.
+            // Falls back to [] silently if Qdrant is unavailable.
+            const crossCtx = this.cfg
+                ? await (0, narrate_1.fetchCrossFileContext)(label, code, this.relativeFilePath(), this.cfg).catch(() => [])
+                : [];
+            const text = await (0, narrate_1.fetchNarration)(label, code, ctx, this.currentLanguage, crossCtx);
             this.narrationCache.set(i, text);
             this.log(`${tag} → narration ready`);
             this.log(`[script] ${tag}:\n${text}`);
@@ -602,7 +615,10 @@ class WalkthroughSession {
         const videoPromise = (async () => {
             try {
                 const ctx = (blockIndex === 0 && this.fileContext) ? this.fileContext : undefined;
-                const narration = await (0, narrate_1.fetchNarration)(block.label, block.code, ctx, 'en');
+                const crossCtx = this.cfg
+                    ? await (0, narrate_1.fetchCrossFileContext)(block.label, block.code, this.relativeFilePath(), this.cfg).catch(() => [])
+                    : [];
+                const narration = await (0, narrate_1.fetchNarration)(block.label, block.code, ctx, 'en', crossCtx);
                 this.narrationCache.set(blockIndex, narration);
                 this.log(`[script] [${blockIndex + 1}/${this.blocks.length}] ${block.label}:\n${narration}`);
                 const audio = await (0, narrate_1.generateAudio)(narration, 'en');
@@ -915,14 +931,27 @@ class WalkthroughSession {
                 this.log(`[flowchart] block ${index}: ERROR — ${msg}`);
                 result = {
                     mermaid: `flowchart LR\n  errNode["Error generating diagram"]:::error\n  classDef error fill:#ef4444,stroke:#dc2626,color:#fff`,
-                    explanations: {},
+                    explanations: [],
                 };
             }
         }
+        // Enrich each flowchart step with cross-file context from Qdrant.
+        // All fetches run in parallel; each has a 5s timeout; Qdrant unavailability → [].
+        const relFilePath = this.relativeFilePath();
+        const enrichedExplanations = await Promise.all(result.explanations.map(async (step) => {
+            if (!this.cfg)
+                return step;
+            const timeoutPromise = new Promise(resolve => setTimeout(() => resolve([]), 5000));
+            const crossCtx = await Promise.race([
+                (0, narrate_1.fetchNodeCrossFileContext)(step.nodeId, relFilePath, this.cfg).catch(() => []),
+                timeoutPromise,
+            ]);
+            return { ...step, crossFileContext: crossCtx };
+        }));
         this.panel?.postMessage({
             type: 'set-flowchart',
             mermaid: result.mermaid,
-            explanations: result.explanations,
+            explanations: enrichedExplanations,
             blockLabel: block.label,
             blockIndex: index,
             totalBlocks: this.blocks.length,
@@ -941,7 +970,7 @@ class WalkthroughSession {
         const cfg = this.cfg ?? {};
         const p = (0, generateFlowchart_1.generateFlowchart)(block.code, block.label, langId, cfg, this.currentLanguage)
             .then(r => { this.flowchartCache.set(index, r); return r; })
-            .catch(() => ({ mermaid: '', explanations: {} }));
+            .catch(() => ({ mermaid: '', explanations: [] }));
         this.flowchartPrefetch.set(index, p);
     }
     async nextFlowchartBlock() {

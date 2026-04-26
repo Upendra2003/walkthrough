@@ -1,11 +1,12 @@
 import * as vscode from "vscode";
+import * as path from "path";
 import { SemanticBlock } from "./parser";
-import { fetchNarration, generateAudio, queryCodebase, fetchDeepDiveNarrations } from "./narrate";
+import { fetchNarration, generateAudio, queryCodebase, fetchDeepDiveNarrations, fetchCrossFileContext, fetchNodeCrossFileContext } from "./narrate";
 import { AudioPlayer } from "./audioPlayer";
 import { renderBlockVideo, clearVideoCache } from "./videoRenderer";
 import { generateBlueprint } from "./generateBlueprint";
 import { generateFlowchart, FlowchartResult } from "./generateFlowchart";
-import type { AnimationBlueprint } from "./blueprintTypes";
+import type { AnimationBlueprint, CrossFileContext } from "./blueprintTypes";
 import { WalkthroughConfig } from "./config";
 
 type Direction = "next" | "prev";
@@ -445,6 +446,14 @@ export class WalkthroughSession {
     r2?.();
   }
 
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  /** Returns the current file's path relative to wsRoot, with forward slashes. */
+  private relativeFilePath(): string {
+    if (!this.filePath || !this.wsRoot) return "";
+    return path.relative(this.wsRoot, this.filePath).replace(/\\/g, "/");
+  }
+
   // ── Prefetch ──────────────────────────────────────────────────────────────
 
   private kickPrefetch(i: number): void {
@@ -522,8 +531,15 @@ export class WalkthroughSession {
 
     try {
       this.log(`${tag} → fetching narration (lang: ${this.currentLanguage})...`);
-      const ctx  = (i === 0 && this.fileContext) ? this.fileContext : undefined;
-      const text = await fetchNarration(label, code, ctx, this.currentLanguage);
+      const ctx = (i === 0 && this.fileContext) ? this.fileContext : undefined;
+
+      // Fetch cross-file context (fast Qdrant call) before the LLM narration call.
+      // Falls back to [] silently if Qdrant is unavailable.
+      const crossCtx: CrossFileContext[] = this.cfg
+        ? await fetchCrossFileContext(label, code, this.relativeFilePath(), this.cfg).catch(() => [])
+        : [];
+
+      const text = await fetchNarration(label, code, ctx, this.currentLanguage, crossCtx);
       this.narrationCache.set(i, text);
       this.log(`${tag} → narration ready`);
       this.log(`[script] ${tag}:\n${text}`);
@@ -687,8 +703,11 @@ export class WalkthroughSession {
 
     const videoPromise = (async (): Promise<string> => {
       try {
-        const ctx       = (blockIndex === 0 && this.fileContext) ? this.fileContext : undefined;
-        const narration = await fetchNarration(block.label, block.code, ctx, 'en');
+        const ctx = (blockIndex === 0 && this.fileContext) ? this.fileContext : undefined;
+        const crossCtx: CrossFileContext[] = this.cfg
+          ? await fetchCrossFileContext(block.label, block.code, this.relativeFilePath(), this.cfg).catch(() => [])
+          : [];
+        const narration = await fetchNarration(block.label, block.code, ctx, 'en', crossCtx);
         this.narrationCache.set(blockIndex, narration);
         this.log(`[script] [${blockIndex + 1}/${this.blocks.length}] ${block.label}:\n${narration}`);
 
@@ -1043,15 +1062,32 @@ export class WalkthroughSession {
         this.log(`[flowchart] block ${index}: ERROR — ${msg}`);
         result = {
           mermaid: `flowchart LR\n  errNode["Error generating diagram"]:::error\n  classDef error fill:#ef4444,stroke:#dc2626,color:#fff`,
-          explanations: {},
+          explanations: [],
         };
       }
     }
 
+    // Enrich each flowchart step with cross-file context from Qdrant.
+    // All fetches run in parallel; each has a 5s timeout; Qdrant unavailability → [].
+    const relFilePath = this.relativeFilePath();
+    const enrichedExplanations = await Promise.all(
+      result.explanations.map(async (step) => {
+        if (!this.cfg) return step;
+        const timeoutPromise = new Promise<CrossFileContext[]>(
+          resolve => setTimeout(() => resolve([]), 5000)
+        );
+        const crossCtx = await Promise.race([
+          fetchNodeCrossFileContext(step.nodeId, relFilePath, this.cfg).catch(() => []),
+          timeoutPromise,
+        ]);
+        return { ...step, crossFileContext: crossCtx };
+      })
+    );
+
     this.panel?.postMessage({
       type: 'set-flowchart',
       mermaid:      result.mermaid,
-      explanations: result.explanations,
+      explanations: enrichedExplanations,
       blockLabel:   block.label,
       blockIndex:   index,
       totalBlocks:  this.blocks.length,
@@ -1071,7 +1107,7 @@ export class WalkthroughSession {
 
     const p = generateFlowchart(block.code, block.label, langId, cfg, this.currentLanguage)
       .then(r => { this.flowchartCache.set(index, r); return r; })
-      .catch((): FlowchartResult => ({ mermaid: '', explanations: {} }));
+      .catch((): FlowchartResult => ({ mermaid: '', explanations: [] }));
 
     this.flowchartPrefetch.set(index, p);
   }

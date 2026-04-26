@@ -1,9 +1,11 @@
 import { callLLM } from './narrate';
 import { WalkthroughConfig } from './config';
+import { FlowchartResult, FlowchartStep } from './blueprintTypes';
 
-export interface FlowchartResult {
-  mermaid:      string;
-  explanations: Record<string, string>;
+export type { FlowchartResult, FlowchartStep };
+
+function nodeIdToTitle(id: string): string {
+  return id.replace(/([A-Z])/g, ' $1').replace(/^./, c => c.toUpperCase()).trim();
 }
 
 const SYSTEM_PROMPT = `You are a Mermaid.js v11 diagram generator for interactive code walkthroughs.
@@ -81,6 +83,7 @@ Explanations keys = participant names.
   alt valid\\n    Server-->>Client: 200\\n  else invalid\\n    Server-->>Client: 401\\n  end
 
 STRICT: NO parentheses in message labels. Write "400 Bad Request" not "(400) Bad Request".
+STRICT: Arrow syntax is EXACTLY ->> or -->>, NEVER --->|label| or flowchart-style pipes. Labels go after colon: "Actor->>Other: label".
 
 ════ STATEDIAGRAM-V2 ════
 Start "mermaid" value with: stateDiagram-v2
@@ -166,12 +169,12 @@ export async function generateFlowchart(
 
   // Parse JSON response
   let mermaid = '';
-  let explanations: Record<string, string> = {};
+  let rawExplanations: Record<string, string> = {};
 
   try {
     const parsed = JSON.parse(stripped);
-    mermaid      = String(parsed.mermaid ?? '');
-    explanations = (parsed.explanations && typeof parsed.explanations === 'object')
+    mermaid           = String(parsed.mermaid ?? '');
+    rawExplanations   = (parsed.explanations && typeof parsed.explanations === 'object')
       ? parsed.explanations as Record<string, string>
       : {};
   } catch {
@@ -188,6 +191,13 @@ export async function generateFlowchart(
     console.warn(`[Flowchart] Invalid mermaid start — falling back to minimal diagram`);
     mermaid = `flowchart LR\n  blockNode["${blockLabel.replace(/"/g, "'")}"]\n  class blockNode process\n  classDef process fill:#0ea5e9,stroke:#0284c7,color:#fff`;
   }
+
+  const explanations: FlowchartStep[] = Object.entries(rawExplanations).map(([nodeId, desc]) => ({
+    nodeId,
+    title:            nodeIdToTitle(nodeId),
+    description:      typeof desc === 'string' ? desc : '',
+    crossFileContext: [],
+  }));
 
   return { mermaid, explanations };
 }
@@ -227,6 +237,16 @@ function sanitizeMermaid(src: string): string {
 
   // ── Sequence diagram fixes ────────────────────────────────────────────────
   if (isSequence) {
+    // Convert flowchart-style pipe-labeled arrows to sequence colon syntax:
+    //   "Actor --->|starts| OtherActor"  →  "Actor -->> OtherActor: starts"
+    // This covers any combo of dashes/arrowheads mixed with |label| syntax.
+    out = out.replace(
+      /^([ \t]*)(.+?)\s*-{1,6}>{1,3}\|([^|\n]+)\|\s*(.+?)[ \t]*$/gm,
+      '$1$2 -->> $4: $3'
+    );
+    // Fix excess dashes in remaining sequence arrows: ---> → -->>,  --->> → -->>
+    // Rule: 3+ dashes followed by an arrow head  →  2 dashes + same head.
+    out = out.replace(/-{3,}(>>|>|x|\))/g, '--$1');
     // (400) in message text  →  [400]
     out = out.replace(
       /^(\s*[\w]+\s*[-]+[>x)]+\s*[\w]+\s*:\s*)(.+)$/gm,

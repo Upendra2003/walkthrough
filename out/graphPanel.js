@@ -931,6 +931,26 @@ body {
       <span id="fc-spacer"></span>
       <button id="fc-download-btn">Download &#x2193;</button>
     </div>
+
+    <!-- Cross-file context popup — positioned absolutely over clicked node -->
+    <div id="node-context-popup" style="
+      display: none;
+      position: absolute;
+      z-index: 999;
+      background: #1a1a2e;
+      border: 1px solid #7C3AED;
+      border-radius: 10px;
+      padding: 12px 16px;
+      max-width: 280px;
+      box-shadow: 0 4px 24px rgba(124,58,237,0.3);
+      font-size: 12px;
+      color: #e0e0e0;
+      pointer-events: none;
+    ">
+      <div id="popup-title" style="font-weight:700; color:#a78bfa; margin-bottom:6px;"></div>
+      <div id="popup-description" style="margin-bottom:8px; line-height:1.5;"></div>
+      <div id="popup-cross-files" style="border-top:1px solid #333; padding-top:8px;"></div>
+    </div>
   </div>
 
   <!-- ③ Subtitle (no lang tag) -->
@@ -1227,9 +1247,15 @@ document.getElementById('lang-picker').addEventListener('click', function(e) {
 });
 
 // Close all popups when clicking anywhere else
-document.addEventListener('click', function() {
+document.addEventListener('click', function(e) {
   document.getElementById('lang-picker').classList.add('hidden');
   document.getElementById('vol-picker').classList.add('hidden');
+  // Hide node-context popup when clicking outside a flowchart node
+  var isNodeEl = e.target && e.target.closest && e.target.closest('g.node, g.actor, g.classGroup, .er.entityBox, .mindmap-node, g.statediagram-state');
+  if (!isNodeEl) {
+    var popup = document.getElementById('node-context-popup');
+    if (popup) popup.style.display = 'none';
+  }
 });
 
 // ── Pause icon swap ───────────────────────────────────────────────────────────
@@ -1494,11 +1520,23 @@ function camelToTitle(s) {
           .trim();
 }
 
+function escHtml(str) {
+  return String(str || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
 function buildSteps(explanations) {
-  fcSteps = Object.entries(explanations).map(function(entry) {
-    var id  = entry[0];
-    var exp = entry[1];
-    return { id: id, label: camelToTitle(id), explanation: exp };
+  var list = Array.isArray(explanations) ? explanations : [];
+  fcSteps = list.map(function(e) {
+    return {
+      id:               e.nodeId || '',
+      label:            e.title  || camelToTitle(e.nodeId || ''),
+      explanation:      e.description    || '',
+      crossFileContext: e.crossFileContext || [],
+    };
   });
   fcActiveStep = -1;
 }
@@ -1517,7 +1555,7 @@ function renderDots() {
   });
 }
 
-function setActiveStep(index) {
+function setActiveStep(index, fromNodeEl) {
   if (index < 0 || index >= fcSteps.length) return;
 
   // Dehighlight old node
@@ -1545,6 +1583,50 @@ function setActiveStep(index) {
 
   // Highlight node in SVG
   highlightNode(step.id, step.label);
+
+  // Cross-file context popup — only on direct node click (fromNodeEl present)
+  var popup = document.getElementById('node-context-popup');
+  if (!popup) return;
+
+  if (fromNodeEl && step.crossFileContext && step.crossFileContext.length > 0) {
+    document.getElementById('popup-title').textContent       = step.label;
+    document.getElementById('popup-description').textContent = step.explanation;
+
+    var filesEl = document.getElementById('popup-cross-files');
+    filesEl.innerHTML = '';
+    step.crossFileContext.forEach(function(ctx) {
+      var div = document.createElement('div');
+      div.style.marginBottom = '5px';
+      var fpSpan = document.createElement('span');
+      fpSpan.style.cssText = 'color:#60a5fa;font-weight:600;';
+      fpSpan.textContent = ctx.filePath;
+      var lblSpan = document.createElement('span');
+      lblSpan.style.color = '#9ca3af';
+      lblSpan.textContent = ' → ' + ctx.blockLabel;
+      var snippetDiv = document.createElement('div');
+      snippetDiv.style.cssText = 'color:#d1d5db;font-size:11px;margin-top:2px;';
+      snippetDiv.textContent = ctx.snippet;
+      div.appendChild(fpSpan);
+      div.appendChild(lblSpan);
+      div.appendChild(snippetDiv);
+      filesEl.appendChild(div);
+    });
+
+    // Position popup to the right of the clicked SVG node
+    var fcZone   = document.getElementById('flowchart-zone');
+    var zoneRect = fcZone ? fcZone.getBoundingClientRect() : { left: 0, top: 0 };
+    var nodeRect = fromNodeEl.getBoundingClientRect();
+    var leftPos  = nodeRect.right - zoneRect.left + 10;
+    var topPos   = nodeRect.top   - zoneRect.top;
+    // Clamp so popup doesn't overflow the zone right edge
+    var zoneW = fcZone ? fcZone.clientWidth : 800;
+    if (leftPos + 290 > zoneW) { leftPos = nodeRect.left - zoneRect.left - 300; }
+    popup.style.left    = Math.max(4, leftPos) + 'px';
+    popup.style.top     = Math.max(4, topPos)  + 'px';
+    popup.style.display = 'block';
+  } else {
+    popup.style.display = 'none';
+  }
 }
 
 function clearNodeHighlight() {
@@ -1655,7 +1737,7 @@ function attachNodeClickHandlers() {
             idx = i; break;
           }
         }
-        if (idx >= 0) setActiveStep(idx);
+        if (idx >= 0) setActiveStep(idx, el);
       });
     });
   });
@@ -1678,12 +1760,13 @@ window.addEventListener('message', function(event) {
       document.body.classList.remove('deepdive-active');
       document.getElementById('video-zone').style.display = '';
       document.getElementById('flowchart-zone').style.display = 'none';
+      { var popupExit = document.getElementById('node-context-popup'); if (popupExit) popupExit.style.display = 'none'; }
       break;
     case 'flowchart-loading':
       fcShowLoading();
       break;
     case 'set-flowchart':
-      currentExplanations = data.explanations || {};
+      currentExplanations = data.explanations || [];
       buildSteps(currentExplanations);
       renderDots();
       fcRenderMermaid(data.mermaid, data.blockLabel, data.blockIndex, data.totalBlocks);

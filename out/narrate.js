@@ -48,6 +48,8 @@ exports.setActiveConfig = setActiveConfig;
 exports.callLLM = callLLM;
 exports.translateText = translateText;
 exports.fetchNarration = fetchNarration;
+exports.fetchCrossFileContext = fetchCrossFileContext;
+exports.fetchNodeCrossFileContext = fetchNodeCrossFileContext;
 exports.generateAudio = generateAudio;
 exports.queryCodebase = queryCodebase;
 exports.fetchDeepDiveNarrations = fetchDeepDiveNarrations;
@@ -271,11 +273,23 @@ function sanitise(text) {
         .replace(/\s{2,}/g, " ")
         .trim();
 }
-async function fetchNarration(label, code, fileContext, language = "en") {
+async function fetchNarration(label, code, fileContext, language = "en", crossFileContext) {
     const userContent = fileContext
         ? `Context: ${fileContext}\n\nBlock: ${label}\n\n${code}`
         : `Block: ${label}\n\n${code}`;
-    const raw = await callLLM(SYSTEM_PROMPT, userContent, 200);
+    let systemPrompt = SYSTEM_PROMPT;
+    if (crossFileContext && crossFileContext.length > 0) {
+        const crossInfo = crossFileContext
+            .map(c => `- ${c.filePath} → ${c.blockLabel}: ${c.snippet}`)
+            .join("\n");
+        systemPrompt =
+            SYSTEM_PROMPT +
+                `\n\nThis block is also referenced or used in other parts of the codebase:\n${crossInfo}\n` +
+                `Weave 1-2 sentences naturally into your narration explaining how this block connects to those files. ` +
+                `Do not list them mechanically — integrate it as: "This is consumed by X to do Y" or "session.ts relies on this to orchestrate Z". ` +
+                `Keep total narration 70-90 words.`;
+    }
+    const raw = await callLLM(systemPrompt, userContent, 220);
     const clean = sanitise(raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim());
     const narration = clean || label;
     if (language === "en")
@@ -289,6 +303,63 @@ async function fetchNarration(label, code, fileContext, language = "en") {
         const msg = err instanceof Error ? err.message : String(err);
         console.warn(`[translate → ${language}] FAILED (${msg}) — using English`);
         return narration;
+    }
+}
+/** Fetch top semantically related blocks from OTHER files for narration enrichment. */
+async function fetchCrossFileContext(blockLabel, blockCode, currentFilePath, cfg, topK = 3) {
+    try {
+        const text = `${blockLabel} ${blockCode.slice(0, 300)}`;
+        const vectors = await (0, embedder_1.embed)([text], cfg);
+        const qVector = vectors[0];
+        const searchRes = await makeQdrantRequest("POST", "/collections/code_blocks/points/search", {
+            vector: qVector,
+            limit: topK + 2,
+            with_payload: true,
+            with_vector: false,
+            score_threshold: 0.15,
+        });
+        const hits = (searchRes.result ?? []).filter(h => (h.payload.file ?? "") !== currentFilePath);
+        if (hits.length === 0)
+            return [];
+        return hits.slice(0, topK).map(h => ({
+            filePath: h.payload.file ?? "",
+            blockLabel: h.payload.label ?? "",
+            snippet: (h.payload.code ?? "").slice(0, 120),
+        }));
+    }
+    catch {
+        // Qdrant unavailable or empty — return plain [] silently
+        return [];
+    }
+}
+/** Fetch cross-file context for a flowchart node ID (cleaned label). */
+async function fetchNodeCrossFileContext(nodeLabel, currentFilePath, cfg) {
+    try {
+        const cleaned = nodeLabel
+            .replace(/([A-Z])/g, " $1")
+            .replace(/_/g, " ")
+            .toLowerCase()
+            .trim();
+        const vectors = await (0, embedder_1.embed)([cleaned], cfg);
+        const qVector = vectors[0];
+        const searchRes = await makeQdrantRequest("POST", "/collections/code_blocks/points/search", {
+            vector: qVector,
+            limit: 5,
+            with_payload: true,
+            with_vector: false,
+            score_threshold: 0.15,
+        });
+        const hits = (searchRes.result ?? []).filter(h => (h.payload.file ?? "") !== currentFilePath);
+        if (hits.length === 0)
+            return [];
+        return hits.slice(0, 3).map(h => ({
+            filePath: h.payload.file ?? "",
+            blockLabel: h.payload.label ?? "",
+            snippet: (h.payload.code ?? "").slice(0, 120),
+        }));
+    }
+    catch {
+        return [];
     }
 }
 // ---------------------------------------------------------------------------

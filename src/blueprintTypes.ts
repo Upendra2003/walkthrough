@@ -35,6 +35,24 @@ export interface GraphNodesScene { type: 'graph-nodes'; title: string; nodes: { 
 
 export interface WordTiming { word: string; startMs: number; endMs: number; }
 
+export interface CrossFileContext {
+  filePath: string;
+  blockLabel: string;
+  snippet: string;
+}
+
+export interface FlowchartStep {
+  nodeId: string;
+  title: string;
+  description: string;
+  crossFileContext: CrossFileContext[];
+}
+
+export interface FlowchartResult {
+  mermaid: string;
+  explanations: FlowchartStep[];
+}
+
 export interface AnimationBlueprint {
   fileTitle: string;
   blockLabel: string;

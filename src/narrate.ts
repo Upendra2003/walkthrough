@@ -17,6 +17,7 @@ import * as path from "path";
 import { SemanticBlock } from "./parser";
 import { WalkthroughConfig } from "./config";
 import { embed } from "./embedder";
+import { CrossFileContext } from "./blueprintTypes";
 
 // ---------------------------------------------------------------------------
 // .env fallback (developer use only — overridden by SecretStorage in production)
@@ -299,13 +300,27 @@ export async function fetchNarration(
   label: string,
   code: string,
   fileContext?: string,
-  language = "en"
+  language = "en",
+  crossFileContext?: CrossFileContext[]
 ): Promise<string> {
   const userContent = fileContext
     ? `Context: ${fileContext}\n\nBlock: ${label}\n\n${code}`
     : `Block: ${label}\n\n${code}`;
 
-  const raw = await callLLM(SYSTEM_PROMPT, userContent, 200);
+  let systemPrompt = SYSTEM_PROMPT;
+  if (crossFileContext && crossFileContext.length > 0) {
+    const crossInfo = crossFileContext
+      .map(c => `- ${c.filePath} → ${c.blockLabel}: ${c.snippet}`)
+      .join("\n");
+    systemPrompt =
+      SYSTEM_PROMPT +
+      `\n\nThis block is also referenced or used in other parts of the codebase:\n${crossInfo}\n` +
+      `Weave 1-2 sentences naturally into your narration explaining how this block connects to those files. ` +
+      `Do not list them mechanically — integrate it as: "This is consumed by X to do Y" or "session.ts relies on this to orchestrate Z". ` +
+      `Keep total narration 70-90 words.`;
+  }
+
+  const raw = await callLLM(systemPrompt, userContent, 220);
   const clean = sanitise(raw.replace(/<think>[\s\S]*?<\/think>/gi, "").trim());
   const narration = clean || label;
 
@@ -319,6 +334,101 @@ export async function fetchNarration(
     const msg = err instanceof Error ? err.message : String(err);
     console.warn(`[translate → ${language}] FAILED (${msg}) — using English`);
     return narration;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cross-file context via Qdrant (used to enrich narration + flowchart popups)
+// ---------------------------------------------------------------------------
+
+interface QdrantSearchHit {
+  score: number;
+  payload: { code?: string; label?: string; file?: string };
+}
+
+/** Fetch top semantically related blocks from OTHER files for narration enrichment. */
+export async function fetchCrossFileContext(
+  blockLabel: string,
+  blockCode: string,
+  currentFilePath: string,
+  cfg: WalkthroughConfig,
+  topK = 3
+): Promise<CrossFileContext[]> {
+  try {
+    const text = `${blockLabel} ${blockCode.slice(0, 300)}`;
+    const vectors = await embed([text], cfg);
+    const qVector = vectors[0];
+
+    const searchRes = await makeQdrantRequest(
+      "POST",
+      "/collections/code_blocks/points/search",
+      {
+        vector: qVector,
+        limit: topK + 2,
+        with_payload: true,
+        with_vector: false,
+        score_threshold: 0.15,
+      }
+    ) as { result?: QdrantSearchHit[] };
+
+    const hits = (searchRes.result ?? []).filter(
+      h => (h.payload.file ?? "") !== currentFilePath
+    );
+
+    if (hits.length === 0) return [];
+
+    return hits.slice(0, topK).map(h => ({
+      filePath:   h.payload.file    ?? "",
+      blockLabel: h.payload.label   ?? "",
+      snippet:    (h.payload.code   ?? "").slice(0, 120),
+    }));
+  } catch {
+    // Qdrant unavailable or empty — return plain [] silently
+    return [];
+  }
+}
+
+/** Fetch cross-file context for a flowchart node ID (cleaned label). */
+export async function fetchNodeCrossFileContext(
+  nodeLabel: string,
+  currentFilePath: string,
+  cfg: WalkthroughConfig
+): Promise<CrossFileContext[]> {
+  try {
+    const cleaned = nodeLabel
+      .replace(/([A-Z])/g, " $1")
+      .replace(/_/g, " ")
+      .toLowerCase()
+      .trim();
+
+    const vectors = await embed([cleaned], cfg);
+    const qVector = vectors[0];
+
+    const searchRes = await makeQdrantRequest(
+      "POST",
+      "/collections/code_blocks/points/search",
+      {
+        vector: qVector,
+        limit: 5,
+        with_payload: true,
+        with_vector: false,
+        score_threshold: 0.15,
+      }
+    ) as { result?: QdrantSearchHit[] };
+
+    const hits = (searchRes.result ?? []).filter(
+      h => (h.payload.file ?? "") !== currentFilePath
+    );
+
+    if (hits.length === 0) return [];
+
+    return hits.slice(0, 3).map(h => ({
+      filePath:   h.payload.file    ?? "",
+      blockLabel: h.payload.label   ?? "",
+      snippet:    (h.payload.code   ?? "").slice(0, 120),
+    }));
+  } catch {
+    return [];
   }
 }
 

@@ -10,7 +10,11 @@
       "Bash(npx ts-prune *)",
       "Bash(npx tsc *)",
       "WebFetch(domain:mermaid.js.org)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(node *)"
     ]
-  }
+  },
+  "enabledMcpjsonServers": [
+    "claude-flow"
+  ]
 }
