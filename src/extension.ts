@@ -11,7 +11,7 @@ import {
 } from "./config";
 import { OnboardingPanel } from "./onboarding";
 import { setActiveConfig, callLLM } from "./narrate";
-import { indexWorkspace, needsIndexing } from "./codebaseIndexer";
+import { indexWorkspace, needsIndexing, qdrantHasData, clearIndexCache } from "./codebaseIndexer";
 import { disposeEmbedder } from "./embedder";
 import { AudioPlayer } from "./audioPlayer";
 import { clearVideoCache } from "./videoRenderer";
@@ -796,11 +796,26 @@ export function activate(context: vscode.ExtensionContext): void {
     const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (wsRoot) clearVideoCache(wsRoot);
     if (wsRoot) {
-      if (needsIndexing(wsRoot, sessionConfig)) {
-        log("[index] New or changed files detected — starting indexing.");
+      const filesChanged = needsIndexing(wsRoot, sessionConfig);
+      log(`[index] needsIndexing=${filesChanged}`);
+
+      // Even if files are unchanged, check Qdrant has actual data.
+      // If the collection is empty (Qdrant was restarted/cleared), force re-index.
+      let forceReindex = false;
+      if (!filesChanged) {
+        const hasData = await qdrantHasData(wsRoot);
+        if (!hasData) {
+          log("[index] Qdrant collection is empty — clearing cache and forcing full re-index.");
+          clearIndexCache(wsRoot);
+          forceReindex = true;
+        }
+      }
+
+      if (filesChanged || forceReindex) {
+        log("[index] Starting indexing...");
         await runIndexingWithUI(wsRoot, sessionConfig);
       } else {
-        log("[index] All files cached and unchanged — skipping indexing.");
+        log("[index] All files cached and Qdrant populated — skipping indexing.");
         activeGraphPanel?.postMessage({
           type: "subtitle",
           words: ["✓", "Codebase", "knowledge", "is", "up", "to", "date."],

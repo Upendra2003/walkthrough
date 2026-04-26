@@ -724,12 +724,25 @@ function activate(context) {
         if (wsRoot)
             (0, videoRenderer_1.clearVideoCache)(wsRoot);
         if (wsRoot) {
-            if ((0, codebaseIndexer_1.needsIndexing)(wsRoot, sessionConfig)) {
-                log("[index] New or changed files detected — starting indexing.");
+            const filesChanged = (0, codebaseIndexer_1.needsIndexing)(wsRoot, sessionConfig);
+            log(`[index] needsIndexing=${filesChanged}`);
+            // Even if files are unchanged, check Qdrant has actual data.
+            // If the collection is empty (Qdrant was restarted/cleared), force re-index.
+            let forceReindex = false;
+            if (!filesChanged) {
+                const hasData = await (0, codebaseIndexer_1.qdrantHasData)(wsRoot);
+                if (!hasData) {
+                    log("[index] Qdrant collection is empty — clearing cache and forcing full re-index.");
+                    (0, codebaseIndexer_1.clearIndexCache)(wsRoot);
+                    forceReindex = true;
+                }
+            }
+            if (filesChanged || forceReindex) {
+                log("[index] Starting indexing...");
                 await runIndexingWithUI(wsRoot, sessionConfig);
             }
             else {
-                log("[index] All files cached and unchanged — skipping indexing.");
+                log("[index] All files cached and Qdrant populated — skipping indexing.");
                 activeGraphPanel?.postMessage({
                     type: "subtitle",
                     words: ["✓", "Codebase", "knowledge", "is", "up", "to", "date."],

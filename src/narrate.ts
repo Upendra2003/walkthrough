@@ -355,9 +355,11 @@ export async function fetchCrossFileContext(
   topK = 3
 ): Promise<CrossFileContext[]> {
   try {
+    console.log(`[cross-file] fetchCrossFileContext: "${blockLabel}" (file: ${currentFilePath})`);
     const text = `${blockLabel} ${blockCode.slice(0, 300)}`;
     const vectors = await embed([text], cfg);
     const qVector = vectors[0];
+    console.log(`[cross-file] Embedded "${blockLabel}" — querying Qdrant (topK=${topK + 2}, threshold=0.15)...`);
 
     const searchRes = await makeQdrantRequest(
       "POST",
@@ -371,19 +373,27 @@ export async function fetchCrossFileContext(
       }
     ) as { result?: QdrantSearchHit[] };
 
-    const hits = (searchRes.result ?? []).filter(
-      h => (h.payload.file ?? "") !== currentFilePath
-    );
+    const allHits = searchRes.result ?? [];
+    console.log(`[cross-file] Qdrant returned ${allHits.length} hit(s) for "${blockLabel}"`);
 
-    if (hits.length === 0) return [];
+    const hits = allHits.filter(h => (h.payload.file ?? "") !== currentFilePath);
+    console.log(`[cross-file] After filtering same-file: ${hits.length} cross-file hit(s)`);
 
-    return hits.slice(0, topK).map(h => ({
+    if (hits.length === 0) {
+      console.log(`[cross-file] No cross-file context for "${blockLabel}"`);
+      return [];
+    }
+
+    const results = hits.slice(0, topK).map(h => ({
       filePath:   h.payload.file    ?? "",
       blockLabel: h.payload.label   ?? "",
       snippet:    (h.payload.code   ?? "").slice(0, 120),
     }));
-  } catch {
-    // Qdrant unavailable or empty — return plain [] silently
+    console.log(`[cross-file] Returning ${results.length} context(s) for "${blockLabel}": ${results.map(r => `${r.filePath} → ${r.blockLabel}`).join(" | ")}`);
+    return results;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[cross-file] fetchCrossFileContext failed for "${blockLabel}": ${msg} — returning []`);
     return [];
   }
 }
@@ -401,8 +411,11 @@ export async function fetchNodeCrossFileContext(
       .toLowerCase()
       .trim();
 
+    console.log(`[cross-file] fetchNodeCrossFileContext: "${nodeLabel}" → cleaned: "${cleaned}" (file: ${currentFilePath})`);
+
     const vectors = await embed([cleaned], cfg);
     const qVector = vectors[0];
+    console.log(`[cross-file] Embedded node "${nodeLabel}" — querying Qdrant (limit=5, threshold=0.15)...`);
 
     const searchRes = await makeQdrantRequest(
       "POST",
@@ -416,18 +429,24 @@ export async function fetchNodeCrossFileContext(
       }
     ) as { result?: QdrantSearchHit[] };
 
-    const hits = (searchRes.result ?? []).filter(
-      h => (h.payload.file ?? "") !== currentFilePath
-    );
+    const allHits = searchRes.result ?? [];
+    console.log(`[cross-file] Qdrant returned ${allHits.length} hit(s) for node "${nodeLabel}"`);
+
+    const hits = allHits.filter(h => (h.payload.file ?? "") !== currentFilePath);
+    console.log(`[cross-file] After filtering same-file: ${hits.length} cross-file hit(s) for node "${nodeLabel}"`);
 
     if (hits.length === 0) return [];
 
-    return hits.slice(0, 3).map(h => ({
+    const results = hits.slice(0, 3).map(h => ({
       filePath:   h.payload.file    ?? "",
       blockLabel: h.payload.label   ?? "",
       snippet:    (h.payload.code   ?? "").slice(0, 120),
     }));
-  } catch {
+    console.log(`[cross-file] Node "${nodeLabel}" context: ${results.map(r => `${r.filePath} → ${r.blockLabel}`).join(" | ")}`);
+    return results;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[cross-file] fetchNodeCrossFileContext failed for "${nodeLabel}": ${msg} — returning []`);
     return [];
   }
 }

@@ -56,6 +56,34 @@ const SUPPORTED_EXTS = new Set([".py", ".ts", ".tsx"]);
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /**
+ * Check if the Qdrant collection has any indexed points.
+ * Returns false if Qdrant is unreachable or the collection doesn't exist.
+ */
+export async function qdrantHasData(_wsRoot: string): Promise<boolean> {
+  const qdrantUrl = (process.env.QDRANT_URL ?? "http://localhost:6333").replace(/\/$/, "");
+  const qdrantKey = process.env.QDRANT_API_KEY;
+  try {
+    const res = await qdrantGet(qdrantUrl, qdrantKey, `/collections/${COLLECTION}`) as {
+      result?: { points_count?: number; vectors_count?: number };
+    };
+    const count = res.result?.points_count ?? res.result?.vectors_count ?? 0;
+    console.log(`[index] Qdrant collection "${COLLECTION}" has ${count} point(s)`);
+    return count > 0;
+  } catch {
+    return false;
+  }
+}
+
+/** Delete the local incremental cache file — forces a full re-index on next run. */
+export function clearIndexCache(wsRoot: string): void {
+  const p = cachePath(wsRoot);
+  if (fs.existsSync(p)) {
+    fs.unlinkSync(p);
+    console.log(`[index] Cleared index cache at ${p}`);
+  }
+}
+
+/**
  * Fast, synchronous pre-check — reads only the local cache file and file hashes.
  * No network calls. Returns true if any file is new/changed or the provider changed.
  * Use this before showing the indexing UI to avoid unnecessary embedding work.

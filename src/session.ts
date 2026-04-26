@@ -538,6 +538,11 @@ export class WalkthroughSession {
       const crossCtx: CrossFileContext[] = this.cfg
         ? await fetchCrossFileContext(label, code, this.relativeFilePath(), this.cfg).catch(() => [])
         : [];
+      if (crossCtx.length > 0) {
+        this.log(`${tag} → cross-file context: ${crossCtx.map(c => `${c.filePath} → ${c.blockLabel}`).join(" | ")}`);
+      } else {
+        this.log(`${tag} → no cross-file context (Qdrant empty or unavailable)`);
+      }
 
       const text = await fetchNarration(label, code, ctx, this.currentLanguage, crossCtx);
       this.narrationCache.set(i, text);
@@ -707,6 +712,11 @@ export class WalkthroughSession {
         const crossCtx: CrossFileContext[] = this.cfg
           ? await fetchCrossFileContext(block.label, block.code, this.relativeFilePath(), this.cfg).catch(() => [])
           : [];
+        if (crossCtx.length > 0) {
+          this.log(`[prefetch] block ${blockIndex} → cross-file context: ${crossCtx.map(c => `${c.filePath} → ${c.blockLabel}`).join(" | ")}`);
+        } else {
+          this.log(`[prefetch] block ${blockIndex} → no cross-file context`);
+        }
         const narration = await fetchNarration(block.label, block.code, ctx, 'en', crossCtx);
         this.narrationCache.set(blockIndex, narration);
         this.log(`[script] [${blockIndex + 1}/${this.blocks.length}] ${block.label}:\n${narration}`);
@@ -1070,6 +1080,7 @@ export class WalkthroughSession {
     // Enrich each flowchart step with cross-file context from Qdrant.
     // All fetches run in parallel; each has a 5s timeout; Qdrant unavailability → [].
     const relFilePath = this.relativeFilePath();
+    this.log(`[flowchart] block ${index}: enriching ${result.explanations.length} node(s) with cross-file context...`);
     const enrichedExplanations = await Promise.all(
       result.explanations.map(async (step) => {
         if (!this.cfg) return step;
@@ -1080,9 +1091,14 @@ export class WalkthroughSession {
           fetchNodeCrossFileContext(step.nodeId, relFilePath, this.cfg).catch(() => []),
           timeoutPromise,
         ]);
+        if (crossCtx.length > 0) {
+          this.log(`[flowchart] node "${step.nodeId}": ${crossCtx.length} cross-file ref(s) — ${crossCtx.map(c => `${c.filePath} → ${c.blockLabel}`).join(" | ")}`);
+        }
         return { ...step, crossFileContext: crossCtx };
       })
     );
+    const enrichedCount = enrichedExplanations.filter(s => s.crossFileContext.length > 0).length;
+    this.log(`[flowchart] block ${index}: ${enrichedCount}/${enrichedExplanations.length} node(s) have cross-file context`);
 
     this.panel?.postMessage({
       type: 'set-flowchart',
